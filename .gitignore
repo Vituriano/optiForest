@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+
+adbench_repo/
+adrepo/
+upstream_optiforest/
+
+data/benchmarks/
+results/
