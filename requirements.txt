@@ -1,0 +1,4 @@
+numpy<2          # numpy 2.x removed np.mat used by upstream OptIForest code
+pandas
+scipy
+scikit-learn
