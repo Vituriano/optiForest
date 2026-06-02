@@ -4,33 +4,45 @@ This workspace reproduces the released OptIForest implementation against the pap
 
 ## Setup
 
-The upstream code was released for `numpy==1.20.1`, `sklearn==0.22.1`, and `pandas==1.4.1`. On this machine the reproduction runner works with a Python 3.11 environment and:
+The upstream code was released for `numpy==1.20.1`, `sklearn==0.22.1`, and `pandas==1.4.1`. The reproduction runner requires `numpy<2` — numpy 2.x removed `np.mat` which the upstream code uses.
 
-- `numpy<2`
-- `pandas`
-- `scipy`
-- `scikit-learn`
+**Tested configuration:** Python 3.12, pip, venv.
 
-One working setup is:
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+Or with uv (Python 3.11 also works):
 
 ```bash
 uv venv --python 3.11 .venv
-uv pip install --python .venv/bin/python "numpy<2" pandas scipy scikit-learn
+uv pip install --python .venv/bin/python -r requirements.txt
 ```
 
 ## Run
 
 The runner bootstraps the upstream OptIForest repo if `upstream_optiforest/` is missing, downloads the benchmark datasets it can source directly, caches them under `data/benchmarks/`, and writes results to `results/`.
 
-```bash
-./.venv/bin/python scripts/run_optiforest_study.py --datasets all --runs 15
-```
-
-For a shorter smoke run:
+**Full paper run** (all 20 datasets, 15 runs each — takes several hours):
 
 ```bash
-./.venv/bin/python scripts/run_optiforest_study.py --datasets ad,arrhythmia,cardio --runs 2
+.venv/bin/python scripts/run_optiforest_study.py --datasets all --runs 15 2>&1 | tee results/full_run.log
 ```
+
+**Smoke test** (uses cached datasets, completes in ~1 min):
+
+```bash
+.venv/bin/python scripts/run_optiforest_study.py --datasets cardio --runs 1
+```
+
+**Subset run:**
+
+```bash
+.venv/bin/python scripts/run_optiforest_study.py --datasets ad,arrhythmia,cardio --runs 2
+```
+
+Results are written to `results/optiforest_summary.csv` and `results/optiforest_runs.csv` **only after all datasets finish**. A mid-run crash will not overwrite existing CSVs.
 
 ## Notes
 
