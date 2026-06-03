@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
+import os
 import random
 import subprocess
 import sys
@@ -313,6 +315,22 @@ def parse_args() -> argparse.Namespace:
         help="Per-run CSV output path.",
     )
     parser.add_argument(
+        "--partials-dir",
+        default=str(RESULTS_DIR / "partial"),
+        help="Directory for per-run checkpoint CSVs.",
+    )
+    parser.add_argument(
+        "--version",
+        default="v1",
+        help="Experiment/code version namespace for partial results.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Datasets to run in parallel. Defaults to min(6, CPU count, dataset count).",
+    )
+    parser.add_argument(
         "--seed-base",
         type=int,
         default=42,
@@ -452,6 +470,13 @@ def dataset_list(arg: str) -> list[str]:
     return names
 
 
+def csv_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open(newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
 def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
     ensure_parent(path)
     if not rows:
@@ -463,107 +488,319 @@ def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
         writer.writerows(rows)
 
 
-def main() -> int:
-    args = parse_args()
+def write_csv_atomic(path: Path, rows: list[dict[str, object]]) -> None:
+    ensure_parent(path)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    write_csv(tmp_path, rows)
+    tmp_path.replace(path)
+
+
+def safe_version(value: str) -> str:
+    safe = "".join(char if char.isalnum() or char in "._-" else "_" for char in value)
+    return safe or "v1"
+
+
+def partial_dataset_dir(args: argparse.Namespace, dataset: str) -> Path:
+    return Path(args.partials_dir) / safe_version(args.version) / dataset
+
+
+def partial_run_path(args: argparse.Namespace, dataset: str, run_number: int) -> Path:
+    return partial_dataset_dir(args, dataset) / f"run_{run_number:02d}.csv"
+
+
+def partial_summary_path(args: argparse.Namespace, dataset: str) -> Path:
+    return partial_dataset_dir(args, dataset) / "summary.csv"
+
+
+def run_row_is_complete(
+    args: argparse.Namespace, dataset: str, run_number: int, row: dict[str, str]
+) -> bool:
+    threshold_arg = "" if args.threshold is None else str(args.threshold)
+    try:
+        return (
+            row.get("dataset") == dataset
+            and row.get("version") == args.version
+            and int(row.get("run", -1)) == run_number
+            and int(row.get("runs", -1)) == args.runs
+            and int(row.get("trees", -1)) == args.trees
+            and int(row.get("branch", -1)) == args.branch
+            and int(row.get("seed_base", -1)) == args.seed_base
+            and row.get("threshold_mode") == args.threshold_mode
+            and row.get("threshold_arg", "") == threshold_arg
+        )
+    except ValueError:
+        return False
+
+
+def completed_run_rows(args: argparse.Namespace, dataset: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for run_number in range(1, args.runs + 1):
+        run_rows = csv_rows(partial_run_path(args, dataset, run_number))
+        if len(run_rows) == 1 and run_row_is_complete(
+            args, dataset, run_number, run_rows[0]
+        ):
+            rows.append(run_rows[0])
+    return rows
+
+
+def missing_runs(args: argparse.Namespace, dataset: str) -> list[int]:
+    complete = {
+        int(row["run"])
+        for row in completed_run_rows(args, dataset)
+    }
+    return [run_number for run_number in range(1, args.runs + 1) if run_number not in complete]
+
+
+def partial_is_complete(args: argparse.Namespace, dataset: str) -> bool:
+    return not missing_runs(args, dataset)
+
+
+def legacy_partial_paths(args: argparse.Namespace, dataset: str) -> tuple[Path, Path]:
+    version_dir = Path(args.partials_dir) / safe_version(args.version)
+    return (
+        version_dir / f"{dataset}_summary.csv",
+        version_dir / f"{dataset}_runs.csv",
+    )
+
+
+def migrate_legacy_partials(args: argparse.Namespace, dataset: str) -> None:
+    summary_path, details_path = legacy_partial_paths(args, dataset)
+    if not summary_path.exists() or not details_path.exists():
+        return
+    detail_rows = csv_rows(details_path)
+    if len(detail_rows) != args.runs:
+        return
+    for row in detail_rows:
+        try:
+            run_number = int(row["run"])
+        except (KeyError, ValueError):
+            return
+        if not run_row_is_complete(args, dataset, run_number, row):
+            return
+    for row in detail_rows:
+        write_csv_atomic(partial_run_path(args, dataset, int(row["run"])), [row])
+    summary_rows = csv_rows(summary_path)
+    if len(summary_rows) == 1:
+        write_csv_atomic(partial_summary_path(args, dataset), summary_rows)
+
+
+def run_dataset_run(
+    dataset: str,
+    run_number: int,
+    args: argparse.Namespace,
+    OptIForest,
+    X: np.ndarray,
+    y: np.ndarray,
+    spec: DatasetSpec,
+    threshold: int,
+    matches: bool,
+    observed_rate: float,
+) -> dict[str, object]:
+    seed = args.seed_base + run_number - 1
+    np.random.seed(seed)
+    random.seed(seed)
+
+    model = OptIForest("L2OPT", args.trees, threshold, args.branch)
+
+    fit_start = time.perf_counter()
+    model.fit(X)
+    fit_seconds = time.perf_counter() - fit_start
+
+    pred_start = time.perf_counter()
+    scores = model.decision_function(X)
+    pred_seconds = time.perf_counter() - pred_start
+
+    auc = roc_auc_score(y, -1.0 * scores)
+    pr = average_precision_score(y, -1.0 * scores)
+
+    return {
+        "version": args.version,
+        "dataset": dataset,
+        "run": run_number,
+        "seed": seed,
+        "n_samples": X.shape[0],
+        "n_features": X.shape[1],
+        "anomaly_rate_pct": observed_rate,
+        "threshold": threshold,
+        "threshold_mode": args.threshold_mode,
+        "threshold_arg": "" if args.threshold is None else args.threshold,
+        "branch": args.branch,
+        "trees": args.trees,
+        "runs": args.runs,
+        "seed_base": args.seed_base,
+        "auc_roc": auc,
+        "auc_pr": pr,
+        "fit_seconds": fit_seconds,
+        "predict_seconds": pred_seconds,
+        "paper_shape_match": matches,
+        "source": spec.source,
+        "note": spec.note,
+    }
+
+
+def summarize_run_rows(
+    args: argparse.Namespace,
+    dataset: str,
+    spec: DatasetSpec,
+    run_rows: list[dict[str, object] | dict[str, str]],
+) -> dict[str, object]:
+    first = run_rows[0]
+    return {
+        "version": args.version,
+        "dataset": dataset,
+        "source": spec.source,
+        "n_samples": int(first["n_samples"]),
+        "n_features": int(first["n_features"]),
+        "anomaly_rate_pct": float(first["anomaly_rate_pct"]),
+        "threshold": int(first["threshold"]),
+        "threshold_mode": args.threshold_mode,
+        "threshold_arg": "" if args.threshold is None else args.threshold,
+        "branch": args.branch,
+        "trees": args.trees,
+        "runs": args.runs,
+        "seed_base": args.seed_base,
+        "completed_runs": len(run_rows),
+        "mean_auc_roc": float(np.mean([float(row["auc_roc"]) for row in run_rows])),
+        "std_auc_roc": float(np.std([float(row["auc_roc"]) for row in run_rows])),
+        "mean_auc_pr": float(np.mean([float(row["auc_pr"]) for row in run_rows])),
+        "std_auc_pr": float(np.std([float(row["auc_pr"]) for row in run_rows])),
+        "mean_fit_seconds": float(np.mean([float(row["fit_seconds"]) for row in run_rows])),
+        "mean_predict_seconds": float(
+            np.mean([float(row["predict_seconds"]) for row in run_rows])
+        ),
+        "paper_shape_match": first["paper_shape_match"],
+        "paper_n_samples": spec.paper.n_samples,
+        "paper_n_features": spec.paper.n_features,
+        "paper_anomaly_rate_pct": spec.paper.anomaly_rate_pct,
+        "note": spec.note,
+    }
+
+
+def run_dataset(dataset: str, args: argparse.Namespace) -> dict[str, object]:
+    migrate_legacy_partials(args, dataset)
+
     OptIForest = import_optiforest()
 
-    selected = dataset_list(args.datasets)
-    detail_rows: list[dict[str, object]] = []
-    summary_rows: list[dict[str, object]] = []
+    spec = PAPER_DATASETS[dataset]
+    X, y = load_dataset(dataset, spec, force=False)
+    threshold = select_threshold(dataset, X, args)
+    matches = shape_matches_paper(X, y, spec)
+    observed_rate = round(100.0 * float(y.mean()), 2)
 
-    print(f"Running OptIForest on {len(selected)} dataset(s): {', '.join(selected)}")
+    print(
+        f"[{dataset}] shape={X.shape} anomalies={int(y.sum())}/{len(y)} "
+        f"rate={observed_rate:.2f}% threshold={threshold} match_paper={matches}",
+        flush=True,
+    )
+
+    pending_runs = missing_runs(args, dataset)
+    completed_count = args.runs - len(pending_runs)
+    if completed_count:
+        print(f"[{dataset}] found {completed_count}/{args.runs} completed run(s)", flush=True)
+
+    for run_number in pending_runs:
+        print(f"[{dataset}] run {run_number}/{args.runs} starting", flush=True)
+        row = run_dataset_run(
+            dataset,
+            run_number,
+            args,
+            OptIForest,
+            X,
+            y,
+            spec,
+            threshold,
+            matches,
+            observed_rate,
+        )
+        write_csv_atomic(partial_run_path(args, dataset, run_number), [row])
+        print(
+            f"[{dataset}] run {run_number}/{args.runs} "
+            f"auc={row['auc_roc']:.4f} pr={row['auc_pr']:.4f} "
+            f"fit={row['fit_seconds']:.2f}s pred={row['predict_seconds']:.2f}s",
+            flush=True,
+        )
+
+    run_rows = completed_run_rows(args, dataset)
+    summary = summarize_run_rows(args, dataset, spec, run_rows)
+    write_csv_atomic(partial_summary_path(args, dataset), [summary])
+
+    print(
+        f"  -> [{dataset}] auc={summary['mean_auc_roc']:.4f}±{summary['std_auc_roc']:.4f} "
+        f"pr={summary['mean_auc_pr']:.4f}±{summary['std_auc_pr']:.4f} "
+        f"fit={summary['mean_fit_seconds']:.2f}s pred={summary['mean_predict_seconds']:.2f}s",
+        flush=True,
+    )
+    return summary
+
+
+def collect_partials(
+    args: argparse.Namespace, selected: list[str]
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    summary_rows: list[dict[str, str]] = []
+    detail_rows: list[dict[str, str]] = []
+    for dataset in selected:
+        run_rows = completed_run_rows(args, dataset)
+        summaries = csv_rows(partial_summary_path(args, dataset))
+        if not summaries and len(run_rows) == args.runs:
+            summary = summarize_run_rows(args, dataset, PAPER_DATASETS[dataset], run_rows)
+            write_csv_atomic(partial_summary_path(args, dataset), [summary])
+            summaries = csv_rows(partial_summary_path(args, dataset))
+        summary_rows.extend(summaries)
+        detail_rows.extend(run_rows)
+    return summary_rows, detail_rows
+
+
+def default_workers(dataset_count: int) -> int:
+    return max(1, min(6, os.cpu_count() or 1, dataset_count))
+
+
+def main() -> int:
+    args = parse_args()
+    selected = dataset_list(args.datasets)
+    workers = args.workers if args.workers is not None else default_workers(len(selected))
+    if args.runs < 1:
+        raise ValueError("--runs must be at least 1")
+    if args.trees < 1:
+        raise ValueError("--trees must be at least 1")
+    if workers < 1:
+        raise ValueError("--workers must be at least 1")
+
+    print(
+        f"Running OptIForest {args.version} on {len(selected)} dataset(s): "
+        f"{', '.join(selected)}"
+    )
+    print(f"Using {workers} dataset worker(s); partials: {Path(args.partials_dir) / safe_version(args.version)}")
 
     for dataset in selected:
-        spec = PAPER_DATASETS[dataset]
-        X, y = load_dataset(dataset, spec, force=args.force_refresh_data)
-        threshold = select_threshold(dataset, X, args)
-        matches = shape_matches_paper(X, y, spec)
-        observed_rate = round(100.0 * float(y.mean()), 2)
+        ensure_dataset_file(dataset, PAPER_DATASETS[dataset], force=args.force_refresh_data)
 
-        aucs: list[float] = []
-        prs: list[float] = []
-        fit_times: list[float] = []
-        pred_times: list[float] = []
+    completed = [dataset for dataset in selected if partial_is_complete(args, dataset)]
+    pending = [dataset for dataset in selected if dataset not in completed]
 
-        print(
-            f"[{dataset}] shape={X.shape} anomalies={int(y.sum())}/{len(y)} "
-            f"rate={observed_rate:.2f}% threshold={threshold} match_paper={matches}"
-        )
+    for dataset in completed:
+        print(f"[{dataset}] skipping existing partial result", flush=True)
 
-        for run_idx in range(args.runs):
-            seed = args.seed_base + run_idx
-            np.random.seed(seed)
-            random.seed(seed)
+    if pending and workers == 1:
+        for dataset in pending:
+            run_dataset(dataset, args)
+    elif pending:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+            future_to_dataset = {
+                executor.submit(run_dataset, dataset, args): dataset for dataset in pending
+            }
+            for future in concurrent.futures.as_completed(future_to_dataset):
+                dataset = future_to_dataset[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    raise RuntimeError(f"{dataset} failed") from exc
 
-            model = OptIForest("L2OPT", args.trees, threshold, args.branch)
+    summary_rows, detail_rows = collect_partials(args, selected)
 
-            fit_start = time.perf_counter()
-            model.fit(X)
-            fit_seconds = time.perf_counter() - fit_start
-
-            pred_start = time.perf_counter()
-            scores = model.decision_function(X)
-            pred_seconds = time.perf_counter() - pred_start
-
-            auc = roc_auc_score(y, -1.0 * scores)
-            pr = average_precision_score(y, -1.0 * scores)
-
-            aucs.append(auc)
-            prs.append(pr)
-            fit_times.append(fit_seconds)
-            pred_times.append(pred_seconds)
-
-            detail_rows.append(
-                {
-                    "dataset": dataset,
-                    "run": run_idx + 1,
-                    "seed": seed,
-                    "n_samples": X.shape[0],
-                    "n_features": X.shape[1],
-                    "anomaly_rate_pct": observed_rate,
-                    "threshold": threshold,
-                    "branch": args.branch,
-                    "auc_roc": auc,
-                    "auc_pr": pr,
-                    "fit_seconds": fit_seconds,
-                    "predict_seconds": pred_seconds,
-                    "paper_shape_match": matches,
-                    "source": spec.source,
-                    "note": spec.note,
-                }
-            )
-
-        summary = {
-            "dataset": dataset,
-            "source": spec.source,
-            "n_samples": X.shape[0],
-            "n_features": X.shape[1],
-            "anomaly_rate_pct": observed_rate,
-            "threshold": threshold,
-            "branch": args.branch,
-            "runs": args.runs,
-            "mean_auc_roc": float(np.mean(aucs)),
-            "std_auc_roc": float(np.std(aucs)),
-            "mean_auc_pr": float(np.mean(prs)),
-            "std_auc_pr": float(np.std(prs)),
-            "mean_fit_seconds": float(np.mean(fit_times)),
-            "mean_predict_seconds": float(np.mean(pred_times)),
-            "paper_shape_match": matches,
-            "paper_n_samples": spec.paper.n_samples,
-            "paper_n_features": spec.paper.n_features,
-            "paper_anomaly_rate_pct": spec.paper.anomaly_rate_pct,
-            "note": spec.note,
-        }
-        summary_rows.append(summary)
-
-        print(
-            f"  -> auc={summary['mean_auc_roc']:.4f}±{summary['std_auc_roc']:.4f} "
-            f"pr={summary['mean_auc_pr']:.4f}±{summary['std_auc_pr']:.4f} "
-            f"fit={summary['mean_fit_seconds']:.2f}s pred={summary['mean_predict_seconds']:.2f}s"
-        )
-
-    write_csv(Path(args.details_output), detail_rows)
-    write_csv(Path(args.output), summary_rows)
+    if summary_rows:
+        write_csv(Path(args.output), summary_rows)
+    if detail_rows:
+        write_csv(Path(args.details_output), detail_rows)
 
     print(f"\nWrote summary: {args.output}")
     print(f"Wrote per-run details: {args.details_output}")
