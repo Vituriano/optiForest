@@ -838,6 +838,8 @@ def main() -> int:
     )
     print(f"Using {workers} dataset worker(s); partials: {Path(args.partials_dir) / safe_version(args.version)}")
 
+    ensure_upstream_repo()
+
     for dataset in selected:
         ensure_dataset_file(dataset, PAPER_DATASETS[dataset], force=args.force_refresh_data)
 
