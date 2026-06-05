@@ -340,6 +340,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--flat-workers",
+        type=int,
+        default=0,
+        help=(
+            "If > 0, run a single flat pool over all (dataset, run) combinations with "
+            "this many workers. Maximizes utilization on a large CPU node by keeping "
+            "every worker busy regardless of dataset boundaries. Overrides --workers "
+            "and --run-workers."
+        ),
+    )
+    parser.add_argument(
         "--seed-base",
         type=int,
         default=42,
@@ -794,6 +805,54 @@ def run_dataset(dataset: str, args: argparse.Namespace) -> dict[str, object]:
     return summary
 
 
+def run_flat_pool(args: argparse.Namespace, pending: list[str], flat_workers: int) -> None:
+    """Run all pending (dataset, run) combinations in a single flat process pool.
+
+    Unlike the per-dataset pool, this keeps every worker busy across dataset
+    boundaries: a fast dataset finishing early frees its slot for a remaining
+    run of a slow dataset, instead of leaving the slot idle.
+    """
+    work: list[tuple[str, int]] = []
+    for dataset in pending:
+        migrate_legacy_partials(args, dataset)
+        for run_number in missing_runs(args, dataset):
+            work.append((dataset, run_number))
+
+    total = len(work)
+    print(
+        f"Flat pool: {total} pending (dataset, run) job(s) across {flat_workers} worker(s)",
+        flush=True,
+    )
+    if not work:
+        return
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=flat_workers) as executor:
+        future_to_item = {
+            executor.submit(_run_single_worker, dataset, run_number, args): (dataset, run_number)
+            for dataset, run_number in work
+        }
+        done = 0
+        for future in concurrent.futures.as_completed(future_to_item):
+            dataset, run_number = future_to_item[future]
+            try:
+                row = future.result()
+            except Exception as exc:
+                raise RuntimeError(f"[{dataset}] run {run_number} failed") from exc
+            done += 1
+            print(
+                f"[{dataset}] run {run_number}/{args.runs} done ({done}/{total}) "
+                f"auc={row['auc_roc']:.4f} pr={row['auc_pr']:.4f} "
+                f"fit={row['fit_seconds']:.2f}s pred={row['predict_seconds']:.2f}s",
+                flush=True,
+            )
+
+    for dataset in pending:
+        run_rows = completed_run_rows(args, dataset)
+        if run_rows:
+            summary = summarize_run_rows(args, dataset, PAPER_DATASETS[dataset], run_rows)
+            write_csv_atomic(partial_summary_path(args, dataset), [summary])
+
+
 def collect_partials(
     args: argparse.Namespace, selected: list[str]
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
@@ -825,7 +884,14 @@ def main() -> int:
         raise ValueError("--trees must be at least 1")
     if workers < 1:
         raise ValueError("--workers must be at least 1")
-    if workers > 1 and args.run_workers > 1:
+    if args.flat_workers < 0:
+        raise ValueError("--flat-workers must be >= 0")
+    if args.flat_workers > 0:
+        if args.workers is not None and args.workers > 1:
+            print("Note: --flat-workers overrides --workers.")
+        if args.run_workers > 1:
+            print("Note: --flat-workers overrides --run-workers.")
+    elif workers > 1 and args.run_workers > 1:
         print(
             "Warning: --workers > 1 and --run-workers > 1 would create nested process pools. "
             "Resetting --run-workers to 1."
@@ -849,7 +915,9 @@ def main() -> int:
     for dataset in completed:
         print(f"[{dataset}] skipping existing partial result", flush=True)
 
-    if pending and workers == 1:
+    if pending and args.flat_workers > 0:
+        run_flat_pool(args, pending, args.flat_workers)
+    elif pending and workers == 1:
         for dataset in pending:
             run_dataset(dataset, args)
     elif pending:
