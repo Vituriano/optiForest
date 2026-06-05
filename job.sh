@@ -4,11 +4,11 @@
 #SBATCH --chdir=/home/CIN/vsmo/optiForest
 #SBATCH --partition=long-simple
 #SBATCH --time=48:00:00
-#SBATCH --cpus-per-task=6
-#SBATCH --mem=16G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=32G
 
 
 .venv/bin/python scripts/run_optiforest_study.py \
   --datasets mnist,cover,arrhythmia \
   --runs 15 \
-  --workers 3
+  --flat-workers 16
