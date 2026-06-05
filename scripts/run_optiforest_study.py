@@ -331,6 +331,15 @@ def parse_args() -> argparse.Namespace:
         help="Datasets to run in parallel. Defaults to min(6, CPU count, dataset count).",
     )
     parser.add_argument(
+        "--run-workers",
+        type=int,
+        default=1,
+        help=(
+            "Runs to execute in parallel within each dataset (default: 1, sequential). "
+            "Useful for large slow datasets. Cannot be combined with --workers > 1."
+        ),
+    )
+    parser.add_argument(
         "--seed-base",
         type=int,
         default=42,
@@ -676,6 +685,32 @@ def summarize_run_rows(
     }
 
 
+def _run_single_worker(
+    dataset: str,
+    run_number: int,
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    """Top-level worker for intra-dataset run parallelism.
+
+    Loads data independently inside the worker process to avoid pickling large
+    numpy arrays across process boundaries.
+    """
+    ensure_upstream_repo()
+    sys.path.insert(0, str(UPSTREAM_DIR))
+    from detectors import OptIForest as _OptIForest  # pylint: disable=import-error
+
+    spec = PAPER_DATASETS[dataset]
+    X, y = load_dataset(dataset, spec, force=False)
+    threshold = select_threshold(dataset, X, args)
+    matches = shape_matches_paper(X, y, spec)
+    observed_rate = round(100.0 * float(y.mean()), 2)
+    row = run_dataset_run(
+        dataset, run_number, args, _OptIForest, X, y, spec, threshold, matches, observed_rate
+    )
+    write_csv_atomic(partial_run_path(args, dataset, run_number), [row])
+    return row
+
+
 def run_dataset(dataset: str, args: argparse.Namespace) -> dict[str, object]:
     migrate_legacy_partials(args, dataset)
 
@@ -698,27 +733,53 @@ def run_dataset(dataset: str, args: argparse.Namespace) -> dict[str, object]:
     if completed_count:
         print(f"[{dataset}] found {completed_count}/{args.runs} completed run(s)", flush=True)
 
-    for run_number in pending_runs:
-        print(f"[{dataset}] run {run_number}/{args.runs} starting", flush=True)
-        row = run_dataset_run(
-            dataset,
-            run_number,
-            args,
-            OptIForest,
-            X,
-            y,
-            spec,
-            threshold,
-            matches,
-            observed_rate,
-        )
-        write_csv_atomic(partial_run_path(args, dataset, run_number), [row])
+    run_workers = getattr(args, "run_workers", 1) or 1
+
+    if run_workers > 1 and len(pending_runs) > 1:
         print(
-            f"[{dataset}] run {run_number}/{args.runs} "
-            f"auc={row['auc_roc']:.4f} pr={row['auc_pr']:.4f} "
-            f"fit={row['fit_seconds']:.2f}s pred={row['predict_seconds']:.2f}s",
+            f"[{dataset}] running {len(pending_runs)} pending run(s) "
+            f"with {run_workers} worker(s) in parallel",
             flush=True,
         )
+        with concurrent.futures.ProcessPoolExecutor(max_workers=run_workers) as executor:
+            future_to_run = {
+                executor.submit(_run_single_worker, dataset, run_number, args): run_number
+                for run_number in pending_runs
+            }
+            for future in concurrent.futures.as_completed(future_to_run):
+                run_number = future_to_run[future]
+                try:
+                    row = future.result()
+                except Exception as exc:
+                    raise RuntimeError(f"[{dataset}] run {run_number} failed") from exc
+                print(
+                    f"[{dataset}] run {run_number}/{args.runs} done "
+                    f"auc={row['auc_roc']:.4f} pr={row['auc_pr']:.4f} "
+                    f"fit={row['fit_seconds']:.2f}s pred={row['predict_seconds']:.2f}s",
+                    flush=True,
+                )
+    else:
+        for run_number in pending_runs:
+            print(f"[{dataset}] run {run_number}/{args.runs} starting", flush=True)
+            row = run_dataset_run(
+                dataset,
+                run_number,
+                args,
+                OptIForest,
+                X,
+                y,
+                spec,
+                threshold,
+                matches,
+                observed_rate,
+            )
+            write_csv_atomic(partial_run_path(args, dataset, run_number), [row])
+            print(
+                f"[{dataset}] run {run_number}/{args.runs} "
+                f"auc={row['auc_roc']:.4f} pr={row['auc_pr']:.4f} "
+                f"fit={row['fit_seconds']:.2f}s pred={row['predict_seconds']:.2f}s",
+                flush=True,
+            )
 
     run_rows = completed_run_rows(args, dataset)
     summary = summarize_run_rows(args, dataset, spec, run_rows)
@@ -764,6 +825,12 @@ def main() -> int:
         raise ValueError("--trees must be at least 1")
     if workers < 1:
         raise ValueError("--workers must be at least 1")
+    if workers > 1 and args.run_workers > 1:
+        print(
+            "Warning: --workers > 1 and --run-workers > 1 would create nested process pools. "
+            "Resetting --run-workers to 1."
+        )
+        args.run_workers = 1
 
     print(
         f"Running OptIForest {args.version} on {len(selected)} dataset(s): "
