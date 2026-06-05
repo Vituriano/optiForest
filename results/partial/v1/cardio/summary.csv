@@ -1,0 +1,2 @@
+version,dataset,source,n_samples,n_features,anomaly_rate_pct,threshold,threshold_mode,threshold_arg,branch,trees,runs,seed_base,completed_runs,mean_auc_roc,std_auc_roc,mean_auc_pr,std_auc_pr,mean_fit_seconds,mean_predict_seconds,paper_shape_match,paper_n_samples,paper_n_features,paper_anomaly_rate_pct,note
+v1,cardio,adbench,1831,21,9.61,55,paper,,0,100,15,42,15,0.8589872287833011,0.013867187821768238,0.48443522499705666,0.02195465054258385,34.936644119466656,12.499288333464452,True,1831,21,9.61,

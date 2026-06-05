@@ -1,0 +1,2 @@
+version,dataset,source,n_samples,n_features,anomaly_rate_pct,threshold,threshold_mode,threshold_arg,branch,trees,runs,seed_base,completed_runs,mean_auc_roc,std_auc_roc,mean_auc_pr,std_auc_pr,mean_fit_seconds,mean_predict_seconds,paper_shape_match,paper_n_samples,paper_n_features,paper_anomaly_rate_pct,note
+v1,census,adbench,299285,500,6.2,403,paper,,0,100,15,42,15,0.6749163517106536,0.010752334461930637,0.08709154939828351,0.0030268238434167697,353.50901943339755,1514.2705642667347,True,299285,500,6.2,
