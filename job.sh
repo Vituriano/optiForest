@@ -2,7 +2,8 @@
 #SBATCH --job-name=optiforest
 #SBATCH --output=/home/CIN/vsmo/optiForest/results/slurm_%j.log
 #SBATCH --chdir=/home/CIN/vsmo/optiForest
-#SBATCH --time=24:00:00
+#SBATCH --partition=long-simple
+#SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=16G
 
