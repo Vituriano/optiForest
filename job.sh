@@ -4,8 +4,10 @@
 #SBATCH --chdir=/home/CIN/vsmo/optiForest
 #SBATCH --partition=long-simple
 #SBATCH --time=48:00:00
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
+#SBATCH --exclusive
+#SBATCH --nodelist=cluster-node5
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=100G
 
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
@@ -15,4 +17,4 @@ export NUMEXPR_NUM_THREADS=1
 .venv/bin/python scripts/run_optiforest_study.py \
   --datasets mnist,cover,arrhythmia \
   --runs 15 \
-  --flat-workers 4
+  --flat-workers 16
