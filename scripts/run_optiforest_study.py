@@ -370,11 +370,76 @@ def ensure_upstream_repo() -> None:
     subprocess.run(["git", "clone", UPSTREAM_REPO, str(UPSTREAM_DIR)], check=True)
 
 
+_PATCHED_INDEX_MERGED_NODE = False
+
+
+def _patch_optiforest_index_merged_node() -> None:
+    """Vectorize ``HierTree.index_merged_node`` for ``num_of_bin == 2``.
+
+    Upstream OptIForest's ``index_merged_node`` calls ``scipy.spatial.distance.euclidean``
+    inside an O(n^2) Python double loop. For datasets where the threshold is
+    in the hundreds, this makes each tree build take minutes — millions of
+    individual scipy calls dominate the runtime (94% in cProfile).
+
+    For ``num_of_bin == 2`` the upstream weighted-distance formula simplifies
+    algebraically::
+
+        dist_ij = ||C[i] - C[j]|| * 2 * S[i] * S[j] / (S[i] + S[j])
+
+    which equals BOTH branches of the upstream code:
+      * the ``S[i] == S[j]`` shortcut ``||C[i]-C[j]|| * S[i]`` matches because
+        ``2*S*S/(2S) = S``;
+      * the general ``get_weight_distance`` call expands to the same expression.
+
+    The derivation uses
+    ``newcenter = (S_i*C_i + S_j*C_j) / (S_i + S_j)``, giving
+    ``newcenter - C_i = S_j/(S_i+S_j) * (C_j - C_i)`` for any norm, so
+    ``S_i*||nc-C_i|| + S_j*||nc-C_j|| = ||C_i-C_j|| * 2*S_i*S_j/(S_i+S_j)``.
+
+    The vectorized version computes the full weighted-distance matrix with a
+    single ``pdist`` call (C-level scipy) instead of n*(n-1)/2 Python calls,
+    yielding the same argmin pair up to floating-point rounding.
+
+    For ``num_of_bin == 3`` the closed form involves three-way center
+    interactions and does not collapse to pairwise distances — we fall back
+    to the original implementation. Running with ``--branch 2`` keeps the
+    fast path on the hot loop.
+    """
+    global _PATCHED_INDEX_MERGED_NODE
+    if _PATCHED_INDEX_MERGED_NODE:
+        return
+    from detectors import opt_tree  # pylint: disable=import-error
+    from scipy.spatial.distance import pdist, squareform
+
+    original_index_merged_node = opt_tree.HierTree.index_merged_node
+
+    def patched(self, hirenodes, num_of_bin):
+        if num_of_bin != 2:
+            return original_index_merged_node(self, hirenodes, num_of_bin)
+        n = len(hirenodes)
+        if n < 2:
+            return None
+        centers = np.asarray([h.get_center() for h in hirenodes], dtype=float)
+        sizes = np.asarray([h.get_data_size() for h in hirenodes], dtype=float)
+        D = squareform(pdist(centers))
+        S_prod = sizes[:, None] * sizes[None, :]
+        S_sum = sizes[:, None] + sizes[None, :]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            W = D * (2.0 * S_prod / S_sum)
+        W[np.tril_indices(n)] = np.inf
+        i, j = np.unravel_index(int(np.argmin(W)), W.shape)
+        return [int(j), int(i)]
+
+    opt_tree.HierTree.index_merged_node = patched
+    _PATCHED_INDEX_MERGED_NODE = True
+
+
 def import_optiforest():
     ensure_upstream_repo()
     sys.path.insert(0, str(UPSTREAM_DIR))
     from detectors import OptIForest  # pylint: disable=import-error
 
+    _patch_optiforest_index_merged_node()
     return OptIForest
 
 
@@ -709,6 +774,8 @@ def _run_single_worker(
     ensure_upstream_repo()
     sys.path.insert(0, str(UPSTREAM_DIR))
     from detectors import OptIForest as _OptIForest  # pylint: disable=import-error
+
+    _patch_optiforest_index_merged_node()
 
     spec = PAPER_DATASETS[dataset]
     X, y = load_dataset(dataset, spec, force=False)
