@@ -5,8 +5,8 @@
 #SBATCH --partition=long-simple
 #SBATCH --time=48:00:00
 #SBATCH --nodelist=cluster-node5
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
 
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
@@ -14,6 +14,6 @@ export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
 .venv/bin/python scripts/run_optiforest_study.py \
-  --datasets mnist,cover,arrhythmia \
+  --datasets arrhythmia \
   --runs 15 \
-  --flat-workers 16
+  --flat-workers 4
