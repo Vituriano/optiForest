@@ -7,6 +7,10 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
 
 .venv/bin/python scripts/run_optiforest_study.py \
   --datasets mnist,cover,arrhythmia \
