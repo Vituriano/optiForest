@@ -400,35 +400,118 @@ def _patch_optiforest_index_merged_node() -> None:
     single ``pdist`` call (C-level scipy) instead of n*(n-1)/2 Python calls,
     yielding the same argmin pair up to floating-point rounding.
 
-    For ``num_of_bin == 3`` the closed form involves three-way center
-    interactions and does not collapse to pairwise distances — we fall back
-    to the original implementation. Running with ``--branch 2`` keeps the
-    fast path on the hot loop.
+    For ``num_of_bin == 3`` the expansion uses
+    ``<a-c, b-c> = (||a-c||^2 + ||b-c||^2 - ||a-b||^2) / 2`` to write each
+    ``||nc - C_k||^2`` as a linear combination of pairwise squared distances
+    only::
+
+        T = S_i + S_j + S_h
+        ||nc - C_i||^2 = (S_j(S_j+S_h) D[i,j] + S_h(S_j+S_h) D[i,h]
+                          - S_j S_h D[j,h]) / T^2
+
+    Then the loop over ``i`` (n iterations) does vectorized arithmetic over
+    all ``(j, h)`` pairs with ``i < j < h``, replacing the upstream O(n^3)
+    Python triple loop. The only scipy call is the single ``pdist`` for the
+    squared-distance matrix.
+
+    Both vectorizations assume Euclidean distance (the L2OPT variant). For
+    cosine/cityblock the patch falls back to the original implementation.
     """
     global _PATCHED_INDEX_MERGED_NODE
     if _PATCHED_INDEX_MERGED_NODE:
         return
     from detectors import opt_tree  # pylint: disable=import-error
+    from scipy.spatial import distance as _scipy_distance
     from scipy.spatial.distance import pdist, squareform
 
     original_index_merged_node = opt_tree.HierTree.index_merged_node
 
     def patched(self, hirenodes, num_of_bin):
-        if num_of_bin != 2:
+        # Only vectorize when the tree uses Euclidean distance (the L2OPT
+        # variant). Other variants (cosine, cityblock) fall back to the
+        # original Python loop — they would need their own derivations.
+        if getattr(self, "distance", None) is not _scipy_distance.euclidean:
             return original_index_merged_node(self, hirenodes, num_of_bin)
+
         n = len(hirenodes)
-        if n < 2:
-            return None
-        centers = np.asarray([h.get_center() for h in hirenodes], dtype=float)
-        sizes = np.asarray([h.get_data_size() for h in hirenodes], dtype=float)
-        D = squareform(pdist(centers))
-        S_prod = sizes[:, None] * sizes[None, :]
-        S_sum = sizes[:, None] + sizes[None, :]
-        with np.errstate(divide="ignore", invalid="ignore"):
-            W = D * (2.0 * S_prod / S_sum)
-        W[np.tril_indices(n)] = np.inf
-        i, j = np.unravel_index(int(np.argmin(W)), W.shape)
-        return [int(j), int(i)]
+        if num_of_bin == 2:
+            if n < 2:
+                return None
+            centers = np.asarray([h.get_center() for h in hirenodes], dtype=float)
+            sizes = np.asarray([h.get_data_size() for h in hirenodes], dtype=float)
+            D = squareform(pdist(centers))
+            S_prod = sizes[:, None] * sizes[None, :]
+            S_sum = sizes[:, None] + sizes[None, :]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                W = D * (2.0 * S_prod / S_sum)
+            W[np.tril_indices(n)] = np.inf
+            i, j = np.unravel_index(int(np.argmin(W)), W.shape)
+            return [int(j), int(i)]
+
+        if num_of_bin == 3:
+            if n < 3:
+                return original_index_merged_node(self, hirenodes, num_of_bin)
+            centers = np.asarray([h.get_center() for h in hirenodes], dtype=float)
+            sizes = np.asarray([h.get_data_size() for h in hirenodes], dtype=float)
+            # Squared pairwise distances: D2[a,b] = ||C_a - C_b||^2
+            D2 = squareform(pdist(centers, "sqeuclidean"))
+
+            # For triplet (i, j, h) with i < j < h, the upstream formula is
+            #   nc = (S_i C_i + S_j C_j + S_h C_h) / T,  T = S_i + S_j + S_h
+            #   dist = ||nc - C_i|| S_i + ||nc - C_j|| S_j + ||nc - C_h|| S_h
+            # Expanding ||nc - C_k||^2 in terms of pairwise squared distances
+            # (using <a-c, b-c> = (||a-c||^2 + ||b-c||^2 - ||a-b||^2) / 2):
+            #   ||nc - C_i||^2 = (S_j (S_j+S_h) D[i,j] + S_h (S_j+S_h) D[i,h]
+            #                    - S_j S_h D[j,h]) / T^2
+            #   ||nc - C_j||^2 = (S_i (S_i+S_h) D[i,j] + S_h (S_i+S_h) D[j,h]
+            #                    - S_i S_h D[i,h]) / T^2
+            #   ||nc - C_h||^2 = (S_i (S_i+S_j) D[i,h] + S_j (S_i+S_j) D[j,h]
+            #                    - S_i S_j D[i,j]) / T^2
+            best_dist = np.inf
+            best_triplet = None
+            # Loop over the smallest index i, vectorize over (j, h) with i<j<h.
+            for i in range(n - 2):
+                # Build (j, h) pairs with i < j < h
+                jh = np.triu_indices(n - i - 1, k=1)
+                jj = jh[0] + i + 1
+                hh = jh[1] + i + 1
+                S_i = sizes[i]
+                S_j = sizes[jj]
+                S_h = sizes[hh]
+                T = S_i + S_j + S_h
+                D_ij = D2[i, jj]
+                D_ih = D2[i, hh]
+                D_jh = D2[jj, hh]
+
+                SP_jh = S_j + S_h
+                SP_ih = S_i + S_h
+                SP_ij = S_i + S_j
+
+                inv_T2 = 1.0 / (T * T)
+                n_i_sq = (S_j * SP_jh * D_ij + S_h * SP_jh * D_ih - S_j * S_h * D_jh) * inv_T2
+                n_j_sq = (S_i * SP_ih * D_ij + S_h * SP_ih * D_jh - S_i * S_h * D_ih) * inv_T2
+                n_h_sq = (S_i * SP_ij * D_ih + S_j * SP_ij * D_jh - S_i * S_j * D_ij) * inv_T2
+
+                # Clamp tiny negatives from floating-point noise
+                np.maximum(n_i_sq, 0.0, out=n_i_sq)
+                np.maximum(n_j_sq, 0.0, out=n_j_sq)
+                np.maximum(n_h_sq, 0.0, out=n_h_sq)
+
+                dist = (
+                    np.sqrt(n_i_sq) * S_i
+                    + np.sqrt(n_j_sq) * S_j
+                    + np.sqrt(n_h_sq) * S_h
+                )
+                if dist.size == 0:
+                    continue
+                local_idx = int(np.argmin(dist))
+                if dist[local_idx] < best_dist:
+                    best_dist = float(dist[local_idx])
+                    best_triplet = [int(hh[local_idx]), int(jj[local_idx]), int(i)]
+
+            return best_triplet
+
+        return original_index_merged_node(self, hirenodes, num_of_bin)
 
     opt_tree.HierTree.index_merged_node = patched
     _PATCHED_INDEX_MERGED_NODE = True

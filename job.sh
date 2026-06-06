@@ -16,5 +16,4 @@ export NUMEXPR_NUM_THREADS=1
 .venv/bin/python scripts/run_optiforest_study.py \
   --datasets arrhythmia,mnist,cover \
   --runs 15 \
-  --branch 2 \
   --flat-workers 8
