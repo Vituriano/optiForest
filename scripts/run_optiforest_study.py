@@ -879,8 +879,12 @@ def run_flat_pool(args: argparse.Namespace, pending: list[str], flat_workers: in
     boundaries: a fast dataset finishing early frees its slot for a remaining
     run of a slow dataset, instead of leaving the slot idle.
     """
+    # Order datasets by paper sample count ascending so smaller datasets
+    # finish quickly and free workers for the heavy ones, instead of the
+    # heavy ones (e.g. cover) hogging every slot from the start.
+    ordered_pending = sorted(pending, key=lambda d: PAPER_DATASETS[d].paper.n_samples)
     work: list[tuple[str, int]] = []
-    for dataset in pending:
+    for dataset in ordered_pending:
         migrate_legacy_partials(args, dataset)
         for run_number in missing_runs(args, dataset):
             work.append((dataset, run_number))
