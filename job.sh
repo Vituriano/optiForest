@@ -6,8 +6,8 @@
 #SBATCH --time=48:00:00
 #SBATCH --exclusive
 #SBATCH --nodelist=cluster-node5
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=100G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
 
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
