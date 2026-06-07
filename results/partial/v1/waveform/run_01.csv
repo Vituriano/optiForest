@@ -1,0 +1,2 @@
+version,dataset,run,seed,n_samples,n_features,anomaly_rate_pct,threshold,threshold_mode,threshold_arg,branch,trees,runs,seed_base,auc_roc,auc_pr,fit_seconds,predict_seconds,paper_shape_match,source,note
+v1,waveform,1,42,3443,21,2.9,55,paper,,0,100,15,42,0.7550134609632067,0.05991230262282747,58.76917462499114,25.478156791999936,False,adbench,"ADBench's released Waveform file is 3443x21 with 2.90% anomalies, so the shape diverges from the appendix table."
