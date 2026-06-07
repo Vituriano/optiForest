@@ -14,6 +14,6 @@ export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
 .venv/bin/python scripts/run_optiforest_study.py \
-  --datasets arrhythmia,mnist,cover \
+  --datasets annthyroid,fraud \
   --runs 15 \
   --flat-workers 8
