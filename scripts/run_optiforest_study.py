@@ -271,6 +271,36 @@ PAPER_DATASETS: OrderedDict[str, DatasetSpec] = OrderedDict(
                 ),
             ),
         ),
+        (
+            "annthyroid",
+            DatasetSpec(
+                kind="npz",
+                cache_name="2_annthyroid.npz",
+                remote_name="2_annthyroid.npz",
+                paper=PaperStats(7200, 6, 7.42),
+                source="adbench",
+                note=(
+                    "New dataset NOT in the OptIForest paper. Medical (thyroid disease) "
+                    "benchmark from ADBench; low-dimensional regime distinct from arrhythmia. "
+                    "paper_shape_match compares against ADBench's own stats, not the paper."
+                ),
+            ),
+        ),
+        (
+            "fraud",
+            DatasetSpec(
+                kind="npz",
+                cache_name="13_fraud.npz",
+                remote_name="13_fraud.npz",
+                paper=PaperStats(284807, 29, 0.17),
+                source="adbench",
+                note=(
+                    "New dataset NOT in the OptIForest paper. Credit-card fraud (finance) "
+                    "benchmark from ADBench; ultra-rare anomaly rate (0.17%) extrapolates "
+                    "beyond the paper's range. Stats are ADBench's own, not the paper."
+                ),
+            ),
+        ),
     ]
 )
 

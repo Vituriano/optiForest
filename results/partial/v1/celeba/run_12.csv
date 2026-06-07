@@ -1,0 +1,2 @@
+version,dataset,run,seed,n_samples,n_features,anomaly_rate_pct,threshold,threshold_mode,threshold_arg,branch,trees,runs,seed_base,auc_roc,auc_pr,fit_seconds,predict_seconds,paper_shape_match,source,note
+v1,celeba,12,53,202599,39,2.24,403,paper,,0,100,15,42,0.7872388805474225,0.07274866081351052,50.56507670899737,741.3572357090015,True,adbench,
