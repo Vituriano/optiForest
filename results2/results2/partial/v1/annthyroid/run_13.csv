@@ -1,0 +1,2 @@
+version,dataset,run,seed,n_samples,n_features,anomaly_rate_pct,threshold,threshold_mode,threshold_arg,branch,trees,runs,seed_base,auc_roc,auc_pr,fit_seconds,predict_seconds,paper_shape_match,source,note
+v1,annthyroid,13,54,7200,6,7.42,55,paper,,0,100,15,42,0.5661554919536897,0.10763497266859773,9.411598328966647,115.67491875495762,True,adbench,"New dataset NOT in the OptIForest paper. Medical (thyroid disease) benchmark from ADBench; low-dimensional regime distinct from arrhythmia. paper_shape_match compares against ADBench's own stats, not the paper."

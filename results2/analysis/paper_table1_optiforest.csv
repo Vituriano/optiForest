@@ -1,0 +1,24 @@
+# Coluna OptIForest da Tabela 1 do paper (IJCAI 2023), valores em %.
+# ATENCAO: transcricao manual de imagem de baixa resolucao -> CONFERIR contra o PDF antes de usar no relatorio.
+# Linhas marcadas com verify=1 sao as que tenho menos certeza na leitura.
+dataset,paper_auc_roc,paper_auc_pr,verify
+ad,88.7,72.6,0
+campaign,76.3,37.2,0
+arrhythmia,82.3,52.4,0
+cardio,92.8,58.9,0
+backdoor,92.7,51.7,0
+kddcup99,97.4,43.0,0
+celeba,79.2,8.1,1
+mnist,85.5,40.7,0
+census,67.8,8.8,0
+donors,90.9,11.3,1
+cover,90.9,6.5,0
+http,99.4,36.9,1
+ionosphere,92.4,92.3,1
+smtp,92.4,55.2,1
+satellite,78.6,71.5,1
+shuttle,98.0,64.0,1
+spam,67.5,63.0,1
+vowel,94.4,41.1,1
+waveform,74.4,11.3,0
+wine,80.0,8.1,1

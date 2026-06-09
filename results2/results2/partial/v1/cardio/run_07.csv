@@ -1,0 +1,2 @@
+version,dataset,run,seed,n_samples,n_features,anomaly_rate_pct,threshold,threshold_mode,threshold_arg,branch,trees,runs,seed_base,auc_roc,auc_pr,fit_seconds,predict_seconds,paper_shape_match,source,note
+v1,cardio,7,48,1831,21,9.61,55,paper,,0,100,15,42,0.8663862949739082,0.5083263862887977,37.11218091699993,12.719835625000997,True,adbench,

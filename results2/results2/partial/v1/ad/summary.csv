@@ -1,0 +1,2 @@
+version,dataset,source,n_samples,n_features,anomaly_rate_pct,threshold,threshold_mode,threshold_arg,branch,trees,runs,seed_base,mean_auc_roc,std_auc_roc,mean_auc_pr,std_auc_pr,mean_fit_seconds,mean_predict_seconds,paper_shape_match,paper_n_samples,paper_n_features,paper_anomaly_rate_pct,note
+v1,ad,upstream_optiforest,3279,1555,14.0,512,paper,,0,100,15,42,0.783024794367445,0.003751062498837801,0.45529321459340427,0.01599755630863221,13.054187461133308,6.188440775001072,False,3279,1555,13.79,Exact sample file from the upstream OptIForest repository.
