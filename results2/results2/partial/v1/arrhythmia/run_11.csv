@@ -1,0 +1,2 @@
+version,dataset,run,seed,n_samples,n_features,anomaly_rate_pct,threshold,threshold_mode,threshold_arg,branch,trees,runs,seed_base,auc_roc,auc_pr,fit_seconds,predict_seconds,paper_shape_match,source,note
+v1,arrhythmia,11,52,452,274,14.6,55,paper,,0,100,15,42,0.7683702308054641,0.5349165492528363,11433.64019479099,3.3149094580148812,True,openml,"Built from OpenML Arrhythmia by dropping the five columns that contain missing values, which recovers the paper's 274-feature shape."

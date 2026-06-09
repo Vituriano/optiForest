@@ -1,0 +1,2 @@
+version,dataset,run,seed,n_samples,n_features,anomaly_rate_pct,threshold,threshold_mode,threshold_arg,branch,trees,runs,seed_base,auc_roc,auc_pr,fit_seconds,predict_seconds,paper_shape_match,source,note
+v1,ionosphere,4,45,351,34,35.9,55,paper,,0,100,15,42,0.9397883597883597,0.9220003854483287,13.286812958001974,2.5950349170016125,True,openml,Uses the 34-feature OpenML Ionosphere dataset to match the paper's shape.

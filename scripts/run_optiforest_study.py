@@ -1,4 +1,16 @@
 #!/usr/bin/env python3
+"""Runner do estudo de reprodução do OptIForest (IJCAI 2023).
+
+Para cada dataset selecionado, baixa/prepara os dados (ADBench, OpenML ou o
+``ad.csv`` do repo upstream), executa o OptIForest ``--runs`` vezes com a
+configuração do artigo (100 árvores, branch=0, limiar ε por tamanho) e escreve
+métricas AUC-ROC/AUC-PR por execução e agregadas.
+
+Os resultados são gravados de forma incremental em ``partial/<versao>/<dataset>/``
+(um CSV por run + summary), permitindo retomar execuções interrompidas sem
+recomputar runs já concluídos. Os CSVs finais consolidados só são escritos após
+todos os datasets terminarem. Veja ``--help`` para os argumentos de CLI.
+"""
 
 from __future__ import annotations
 

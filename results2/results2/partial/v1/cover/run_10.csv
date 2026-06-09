@@ -1,0 +1,2 @@
+version,dataset,run,seed,n_samples,n_features,anomaly_rate_pct,threshold,threshold_mode,threshold_arg,branch,trees,runs,seed_base,auc_roc,auc_pr,fit_seconds,predict_seconds,paper_shape_match,source,note
+v1,cover,10,51,286048,10,0.96,403,paper,,0,100,15,42,0.7422634646482908,0.018626187358670533,4367.0295186359435,11198.963492826093,True,adbench,

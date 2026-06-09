@@ -1,0 +1,2 @@
+version,dataset,run,seed,n_samples,n_features,anomaly_rate_pct,threshold,threshold_mode,threshold_arg,branch,trees,runs,seed_base,auc_roc,auc_pr,fit_seconds,predict_seconds,paper_shape_match,source,note
+v1,wine,8,49,129,13,7.75,55,paper,,0,100,15,42,0.9966386554621848,0.9633333333333334,773.9336836250004,1.0063764579972485,False,adbench,"ADBench's released wine dataset is the classic 129x13 ODDS benchmark, not the 5318x11 dataset listed in the paper appendix."

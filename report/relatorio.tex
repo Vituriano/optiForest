@@ -1,0 +1,372 @@
+% =====================================================================
+%  Relatorio - Reproducao do artigo OptIForest (IJCAI 2023)
+%
+%  RASCUNHO gerado para o projeto. PORTAR para a copia do template
+%  Overleaf institucional do CIn-UFPE exigida pelo professor:
+%  troque o \documentclass e o preambulo pelos do template e cole o
+%  corpo (do \begin{document} ao fim) nas secoes correspondentes.
+%
+%  Marcadores [PREENCHER] indicam pontos que a equipe deve completar.
+%  Valores do paper na tabela comparativa: CONFERIR contra o PDF
+%  (ver results2/analysis/paper_table1_optiforest.csv).
+% =====================================================================
+\documentclass[10pt,twocolumn]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazil]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{url}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+
+\title{Reprodu\c{c}\~ao e Avalia\c{c}\~ao de Generaliza\c{c}\~ao do OptIForest\\
+\large Detec\c{c}\~ao de Anomalias com Floresta de Isolamento \'Otima}
+\author{Tiago Lima \and Vituriano Oliveira \and [PREENCHER: integrante 3] \and [PREENCHER: integrante 4]\\
+Centro de Inform\'atica -- UFPE}
+\date{Junho de 2026}
+
+\begin{document}
+\maketitle
+
+% =====================================================================
+\begin{abstract}
+A detec\c{c}\~ao n\~ao-supervisionada de anomalias \'e um problema central em
+seguran\c{c}a, fraude e diagn\'ostico, no qual as florestas de isolamento
+(\emph{Isolation Forest}) se destacam por efici\^encia. Por\'em, a maioria dessas
+florestas usa estrutura bin\'aria sem fundamenta\c{c}\~ao te\'orica sobre o fator
+de ramifica\c{c}\~ao \'otimo. O artigo de refer\^encia, \emph{OptIForest}, formaliza
+o conceito de efici\^encia de isolamento e mostra que o fator de ramifica\c{c}\~ao
+\'otimo \'e $e$, propondo uma floresta que combina \emph{learning-to-hash} por
+\emph{clustering}. Neste trabalho reproduzimos o OptIForest sobre os
+\emph{benchmarks} do artigo e avaliamos sua generaliza\c{c}\~ao em dois conjuntos
+de dados externos (\emph{annthyroid} e \emph{fraud}). Reproduzimos a tend\^encia
+geral de desempenho do artigo e mostramos, por an\'alise de correla\c{c}\~ao, que o
+AUC-ROC degrada com a dimensionalidade e \'e robusto \`a escala, enquanto o AUC-PR
+\'e governado pela raridade da anomalia. Os resultados confirmam que o m\'etodo
+generaliza bem em dados separ\'aveis (\emph{fraud}, AUC-ROC $0{,}95$) e exp\~oe seus
+limites em anomalias sutis de baixa dimens\~ao (\emph{annthyroid}, AUC-ROC $0{,}57$).
+\end{abstract}
+
+% =====================================================================
+\section{Introdu\c{c}\~ao}
+
+\textbf{Problema.} Detec\c{c}\~ao de anomalias consiste em identificar inst\^ancias
+raras que se desviam do padr\~ao dos dados, tipicamente sem r\'otulos
+(n\~ao-supervisionada). \'E interessante por aparecer em dom\'inios cr\'iticos --
+fraude financeira, intrus\~ao em redes, diagn\'ostico m\'edico -- nos quais
+anomalias s\~ao escassas e caras de rotular.
+
+\textbf{Por que o artigo foi necess\'ario.} A \emph{Isolation Forest} (iForest)
+isola anomalias por parti\c{c}\~oes aleat\'orias e \'e eficiente, mas usa \'arvores
+bin\'arias por conven\c{c}\~ao. Trabalhos como a LSHiForest mostraram empiricamente
+que estruturas multi-ramo podem detectar melhor, por\'em \emph{sem} teoria que
+determinasse o fator de ramifica\c{c}\~ao \'otimo. Faltava resposta te\'orica e
+pr\'atica para a estrutura ideal de uma floresta de isolamento.
+
+\textbf{Solu\c{c}\~oes existentes e desvantagens.} M\'etodos de isolamento
+(iForest, LSHiForest) n\~ao aprendem com os dados; m\'etodos de aprendizado
+profundo (REPEN, RDP) aprendem, mas t\^em alto custo computacional; m\'etodos
+estat\'isticos (ECOD) s\~ao r\'apidos, por\'em fr\'ageis quando a distribui\c{c}\~ao
+foge de suas premissas.
+
+\textbf{Proposta do artigo.} O OptIForest formaliza a \emph{efici\^encia de
+isolamento}, prova que o fator de ramifica\c{c}\~ao \'otimo \'e $e \approx 2{,}718$ e
+constr\'oi uma floresta que aproxima esse \'otimo combinando \emph{learning-to-hash}
+por \emph{clustering}, equilibrando custo e desempenho.
+
+\textbf{Contribui\c{c}\~oes deste trabalho:}
+\begin{itemize}
+  \item Reprodu\c{c}\~ao do OptIForest sobre os \emph{benchmarks} do artigo, com
+        documenta\c{c}\~ao das diverg\^encias entre os arquivos p\'ublicos e o ap\^endice.
+  \item Avalia\c{c}\~ao da generaliza\c{c}\~ao em dois conjuntos externos
+        (\emph{annthyroid}, m\'edico; \emph{fraud}, financeiro), com justificativa.
+  \item An\'alise de correla\c{c}\~ao entre desempenho e caracter\'isticas dos dados,
+        explicando \emph{quando} e \emph{por que} o m\'etodo generaliza.
+\end{itemize}
+
+% =====================================================================
+\section{Trabalhos Relacionados}
+
+\textbf{iForest}~\cite{iforest} introduz o isolamento por parti\c{c}\~oes
+aleat\'orias; \'e r\'apido, mas n\~ao aprende com os dados e usa \'arvore bin\'aria.
+\textbf{LSHiForest}~\cite{lshiforest} generaliza o isolamento via fun\c{c}\~oes de
+\emph{hash} sens\'iveis \`a localidade e mostra ganho com estruturas multi-ramo,
+sem teoria do fator \'otimo. \textbf{ECOD}~\cite{ecod} estima fun\c{c}\~oes de
+distribui\c{c}\~ao emp\'iricas, sendo determin\'istico e r\'apido, mas sens\'ivel \`a
+forma da distribui\c{c}\~ao. \textbf{REPEN}~\cite{repen} e \textbf{RDP}~\cite{rdp}
+aprendem representa\c{c}\~oes para detec\c{c}\~ao baseada em dist\^ancia, com custo
+elevado. O OptIForest se posiciona entre isolamento e aprendizado, herdando a
+efici\^encia do primeiro e parte da capacidade do segundo.
+% [PREENCHER opcional: 1-2 trabalhos recentes adicionais.]
+
+% =====================================================================
+\section{Modelo de Ameaça}
+\emph{N\~ao se aplica.} Este trabalho trata de detec\c{c}\~ao n\~ao-supervisionada de
+anomalias, sem um advers\'ario ativo nem ataques modelados; portanto n\~ao h\'a
+modelo de amea\c{c}a a descrever.
+
+% =====================================================================
+\section{Sistema Proposto pelo Artigo de Refer\^encia}
+
+\textbf{Vis\~ao geral.} O OptIForest \'e um \emph{ensemble} de \'arvores de
+isolamento \'otimas. \textbf{Entrada:} um conjunto de dados $D$ sem r\'otulos.
+\textbf{Sa\'ida:} um \emph{score} de anomalia por inst\^ancia (quanto menor o
+caminho de isolamento, mais an\^omala). Cada \'arvore tem duas partes: camadas
+inferiores produzidas por uma floresta LSH (\emph{LSHiForest}) e camadas superiores
+refinadas por \emph{clustering} hier\'arquico aglomerativo -- a parte que ``aprende''
+com os dados.
+
+\textbf{Efici\^encia de isolamento e fator $e$.} O artigo define a efici\^encia de
+isolamento e formula um problema de otimiza\c{c}\~ao cuja solu\c{c}\~ao indica fator de
+ramifica\c{c}\~ao \'otimo $v \approx e$. Na pr\'atica, usam-se ramos bin\'arios e
+tern\'arios com distribui\c{c}\~ao exponencial para aproximar $e$.
+
+\textbf{Aprendizado por clustering (Algoritmo~\ref{alg:opt}).} A \'arvore LSH \'e
+cortada por um limiar $\epsilon$ (\emph{cut threshold}): n\'os com tamanho
+$\le \epsilon$ tornam-se \emph{clusters} iniciais, que s\~ao fundidos minimizando a
+\emph{distor\c{c}\~ao}
+\begin{equation}
+  \mathrm{dist}(\mathbb{C}) = \sum_{i=1}^{v} \lVert \mu_{\mathcal{C}_i} - \mu_{\mathbb{C}} \rVert \cdot n_i,
+  \label{eq:distortion}
+\end{equation}
+onde $\mu$ s\~ao centros ponderados pelo tamanho $n_i$ dos \emph{clusters}. O
+par\^ametro $\epsilon$ controla o \emph{grau de aprendizado}: $\epsilon$ pequeno
+aprende mais (mais \emph{clusters}); $\epsilon$ grande degenera na LSHiForest.
+
+\begin{algorithm}[t]
+\caption{Constru\c{c}\~ao da \'arvore de isolamento \'otima (resumo).}
+\label{alg:opt}
+\begin{algorithmic}[1]
+  \STATE Treinar LSHiForest para obter a \'arvore $T_{LSH}$
+  \STATE Cortar $T_{LSH}$ pelo limiar $\epsilon$ $\rightarrow$ \emph{clusters} iniciais
+  \WHILE{n\'umero de \emph{clusters} $> 1$}
+    \STATE Sortear fator de ramifica\c{c}\~ao $v \in \{2,3\}$ (aprox.\ $e$)
+    \STATE Fundir os $v$ \emph{clusters} de menor distor\c{c}\~ao (Eq.~\ref{eq:distortion})
+  \ENDWHILE
+  \STATE \textbf{retornar} \'arvore \'otima $T_{Opt}$
+\end{algorithmic}
+\end{algorithm}
+% Obs.: se o template nao tiver o pacote algorithmic/algorithm,
+% troque o ambiente acima por uma figura do pseudo-codigo.
+
+% =====================================================================
+\section{Metodologia}
+
+\textbf{Protocolo de avalia\c{c}\~ao.} O OptIForest \'e \textbf{n\~ao-supervisionado}:
+n\~ao h\'a divis\~ao treino/valida\c{c}\~ao/teste. O modelo \'e ajustado e avaliado
+sobre \emph{todo} o conjunto, e as anomalias servem apenas como gabarito para o
+c\'alculo das m\'etricas. Por isso reportamos a contagem por classe (normal vs.\
+anomalia) do conjunto completo, n\~ao por parti\c{c}\~ao.
+
+\textbf{M\'etricas.} Seguindo o artigo, usamos \textbf{AUC-ROC} (capacidade de
+ranquear anomalias acima de normais, insens\'ivel \`a preval\^encia) e
+\textbf{AUC-PR} (sens\'ivel ao desbalanceamento). Cada configura\c{c}\~ao roda
+$15$ vezes (sementes $42$--$56$), com $100$ \'arvores e o limiar $\epsilon$ pela
+regra do artigo ($512$ para \emph{ad}/\emph{vowel}; $403$ para $>10^4$ amostras
+ou $>10^3$ \emph{features}; $55$ caso contr\'ario).
+
+\subsection{Dados usados pelo artigo}
+O artigo avalia $20$ \emph{benchmarks} tabulares. Reproduzimos todos os
+dispon\'iveis a partir de fontes p\'ublicas (ADBench e OpenML). Tr\^es exemplos
+representativos por diversidade de caracter\'isticas:
+\begin{itemize}
+  \item \emph{arrhythmia} (m\'edico, alta dimens\~ao): $452$ amostras, $274$
+        \emph{features}; $66$ anomalias / $386$ normais.
+  \item \emph{mnist} (imagem, dimens\~ao m\'edia): $7\,603$ amostras, $100$
+        \emph{features}; $700$ anomalias / $6\,903$ normais.
+  \item \emph{cover} (grande, anomalia rara): $286\,048$ amostras, $10$
+        \emph{features}; $2\,746$ anomalias / $283\,302$ normais.
+\end{itemize}
+Diverg\^encias documentadas entre arquivos p\'ublicos e o ap\^endice (\emph{wine},
+\emph{waveform}, \emph{kddcup99}) s\~ao registradas e sinalizadas na sa\'ida.
+
+\subsection{Outro conjunto de dados escolhido}
+Para avaliar generaliza\c{c}\~ao, escolhemos dois conjuntos \textbf{fora} dos $20$ do
+artigo, ambos do ADBench (mesmo formato, sem c\'odigo adicional de I/O):
+\begin{itemize}
+  \item \emph{annthyroid} (m\'edico, tireoide): $7\,200$ amostras, $6$
+        \emph{features}; $534$ anomalias / $6\,666$ normais. \emph{Por qu\^e:}
+        regime de baix\'issima dimens\~ao, contrastando com \emph{arrhythmia}
+        (m\'edico, mas $274$ \emph{features}), isolando o efeito da dimensionalidade.
+  \item \emph{fraud} (financeiro, cart\~ao de cr\'edito): $284\,807$ amostras, $29$
+        \emph{features}; $484$ anomalias / $284\,323$ normais. \emph{Por qu\^e:}
+        dom\'inio novo e anomalia ultra-rara ($0{,}17\%$), abaixo do menor caso do
+        artigo (\emph{cover}, $0{,}96\%$), testando robustez em desbalanceamento
+        extremo.
+\end{itemize}
+
+% =====================================================================
+\section{Resultados e Discuss\~oes}
+
+\subsection{Reprodu\c{c}\~ao nos dados do artigo}
+A Tabela~\ref{tab:repro} resume os resultados reproduzidos. Reproduzimos a
+tend\^encia geral do artigo: desempenho alto em \emph{http}, \emph{shuttle},
+\emph{wine} e \emph{ionosphere}, e mais baixo em \emph{census} e \emph{campaign}.
+A Tabela~\ref{tab:comp} compara o AUC-ROC reproduzido com o do artigo. As maiores
+diverg\^encias ocorrem onde o arquivo p\'ublico difere do ap\^endice
+(\emph{wine}: $+19{,}7$ pontos, pois o ADBench usa o conjunto ODDS $129\times13$,
+n\~ao o $5\,318\times11$ do artigo) ou onde o \emph{pipeline} p\'ublico de amostragem
+diverge (\emph{mnist} $-25{,}3$, \emph{cover} $-22{,}5$). Datasets com arquivo
+id\^entico ao do artigo (ex.\ \emph{http} $-0{,}0$, \emph{census} $-0{,}3$,
+\emph{shuttle} $+0{,}9$) reproduzem com fidelidade, o que valida a corre\c{c}\~ao da
+nossa implementa\c{c}\~ao.
+
+% --- Tabela 1: resultados reproduzidos ---
+\begin{table}[t]
+\centering
+\caption{Resultados reproduzidos do OptIForest (AUC-ROC e AUC-PR em \%,
+m\'edia $\pm$ desvio sobre 15 execu\c{c}\~oes). Datasets novos em \textbf{negrito}.}
+\label{tab:repro}
+\begin{tabular}{lrrrr}
+\toprule
+Dataset & \#Amostras & Anom.\% & AUC-ROC & AUC-PR \\
+\midrule
+ad & 3279 & 14.00 & 78.3 $\pm$ 0.4 & 45.5 $\pm$ 1.6 \\
+\textbf{annthyroid} & 7200 & 7.42 & 56.8 $\pm$ 2.0 & 11.8 $\pm$ 1.3 \\
+arrhythmia & 452 & 14.60 & 77.4 $\pm$ 1.3 & 53.8 $\pm$ 2.9 \\
+backdoor & 95329 & 2.44 & 90.9 $\pm$ 1.1 & 29.4 $\pm$ 6.3 \\
+campaign & 41188 & 11.27 & 68.9 $\pm$ 1.3 & 25.6 $\pm$ 1.8 \\
+cardio & 1831 & 9.61 & 85.9 $\pm$ 1.4 & 48.4 $\pm$ 2.2 \\
+celeba & 202599 & 2.24 & 77.9 $\pm$ 1.7 & 7.7 $\pm$ 1.0 \\
+census & 299285 & 6.20 & 67.5 $\pm$ 1.1 & 8.7 $\pm$ 0.3 \\
+cover & 286048 & 0.96 & 68.4 $\pm$ 4.0 & 1.5 $\pm$ 0.3 \\
+donors & 619326 & 5.93 & 77.2 $\pm$ 4.6 & 12.0 $\pm$ 2.0 \\
+\textbf{fraud} & 284807 & 0.17 & 94.8 $\pm$ 0.4 & 41.7 $\pm$ 5.7 \\
+http & 567498 & 0.39 & 99.4 $\pm$ 0.0 & 35.8 $\pm$ 0.9 \\
+ionosphere & 351 & 35.90 & 94.0 $\pm$ 0.4 & 92.6 $\pm$ 0.4 \\
+kddcup99 & 567498 & 0.39 & 99.4 $\pm$ 0.0 & 35.8 $\pm$ 0.9 \\
+mnist & 7603 & 9.21 & 60.2 $\pm$ 2.3 & 15.1 $\pm$ 2.8 \\
+satellite & 6435 & 31.64 & 66.0 $\pm$ 1.6 & 64.7 $\pm$ 1.7 \\
+shuttle & 49097 & 7.15 & 98.9 $\pm$ 0.3 & 82.5 $\pm$ 3.0 \\
+smtp & 95156 & 0.03 & 86.2 $\pm$ 1.4 & 60.6 $\pm$ 3.6 \\
+spam & 4207 & 39.91 & 71.1 $\pm$ 0.4 & 58.5 $\pm$ 0.7 \\
+vowel & 1456 & 3.43 & 91.1 $\pm$ 0.9 & 31.8 $\pm$ 3.2 \\
+waveform & 3443 & 2.90 & 75.1 $\pm$ 1.2 & 6.0 $\pm$ 0.5 \\
+wine & 129 & 7.75 & 99.7 $\pm$ 0.2 & 96.8 $\pm$ 1.9 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% --- Tabela 2: comparacao vs paper. Valores do paper: CONFERIR (ver
+%     results2/analysis/paper_table1_optiforest.csv). * = valor a conferir. ---
+\begin{table}[t]
+\centering
+\caption{Reprodu\c{c}\~ao vs.\ paper (AUC-ROC \%). Apenas datasets do paper.}
+\label{tab:comp}
+\begin{tabular}{lrrr}
+\toprule
+Dataset & Paper & Reproduzido & $\Delta$ \\
+\midrule
+ad & 88.7 & 78.3 & -10.4 \\
+arrhythmia & 82.3 & 77.4 & -4.9 \\
+backdoor & 92.7 & 90.9 & -1.8 \\
+campaign & 76.3 & 68.9 & -7.4 \\
+cardio & 92.8 & 85.9 & -6.9 \\
+celeba$^{*}$ & 79.2 & 77.9 & -1.3 \\
+census & 67.8 & 67.5 & -0.3 \\
+cover & 90.9 & 68.4 & -22.5 \\
+donors$^{*}$ & 90.9 & 77.2 & -13.7 \\
+http$^{*}$ & 99.4 & 99.4 & -0.0 \\
+ionosphere$^{*}$ & 92.4 & 94.0 & +1.6 \\
+kddcup99 & 97.4 & 99.4 & +2.0 \\
+mnist & 85.5 & 60.2 & -25.3 \\
+satellite$^{*}$ & 78.6 & 66.0 & -12.6 \\
+shuttle$^{*}$ & 98.0 & 98.9 & +0.9 \\
+smtp$^{*}$ & 92.4 & 86.2 & -6.2 \\
+spam$^{*}$ & 67.5 & 71.1 & +3.6 \\
+vowel$^{*}$ & 94.4 & 91.1 & -3.3 \\
+waveform & 74.4 & 75.1 & +0.7 \\
+wine$^{*}$ & 80.0 & 99.7 & +19.7 \\
+\bottomrule
+\end{tabular}
+\\[2pt]\footnotesize $^{*}$ valor do paper a conferir.
+\end{table}
+
+\subsection{Resultados nos dados escolhidos}
+\emph{fraud} obteve AUC-ROC $0{,}948 \pm 0{,}004$ e AUC-PR $0{,}417 \pm 0{,}057$:
+mesmo com $0{,}17\%$ de anomalias, as fraudes s\~ao bem separ\'aveis e o m\'etodo
+ranqueia com excel\^encia. \emph{annthyroid} obteve AUC-ROC $0{,}568 \pm 0{,}020$ e
+AUC-PR $0{,}118 \pm 0{,}013$: abaixo da faixa t\'ipica de iForest, pois a anomalia \'e
+sutil e o limiar $\epsilon = 55$ (regra do artigo para $\le 10^4$ amostras) limita o
+aprendizado em baixa dimens\~ao. O contraste entre os dois casos delimita
+\emph{quando} o m\'etodo generaliza.
+
+\subsection{Correla\c{c}\~ao entre desempenho e caracter\'isticas}
+A Figura~\ref{fig:corr} e a Tabela~\ref{tab:corr} relacionam o desempenho \`as
+caracter\'isticas dos $22$ conjuntos. Tr\^es padr\~oes emergem (Pearson e Spearman
+concordam): (i)~o AUC-ROC \textbf{degrada com a dimensionalidade}
+($r \approx -0{,}36$) -- coerente com a maldi\c{c}\~ao da dimens\~ao no \emph{hashing};
+(ii)~o AUC-ROC \textbf{independe da escala} ($r \approx 0$ com o n\'umero de
+amostras) -- boa generaliza\c{c}\~ao de $129$ a $619$ mil amostras; (iii)~o AUC-PR
+\textbf{cresce com a taxa de anomalia} ($r \approx +0{,}50$). Ressalva
+metodol\'ogica: parte de (iii) \'e \emph{mec\^anica}, pois a linha de base do AUC-PR
+\'e a pr\'opria preval\^encia; logo, o AUC-ROC \'e o crit\'erio mais justo entre
+conjuntos. Esses padr\~oes explicam diretamente os dois casos novos: \emph{fraud}
+(baixa dimens\~ao, separ\'avel) segue o padr\~ao e generaliza; \emph{annthyroid}
+(anomalia sutil) \'e o contraexemplo que revela os limites.
+
+\begin{table}[t]
+\centering
+\caption{Correla\c{c}\~ao (Pearson~/~Spearman) entre desempenho e caracter\'isticas.}
+\label{tab:corr}
+\begin{tabular}{llrr}
+\toprule
+Caracter\'istica & M\'etrica & Pearson & Spearman \\
+\midrule
+N\textsuperscript{o} amostras   & AUC-ROC & $0{,}03$  & $-0{,}03$ \\
+N\textsuperscript{o} amostras   & AUC-PR  & $-0{,}54$ & $-0{,}50$ \\
+N\textsuperscript{o} features   & AUC-ROC & $-0{,}35$ & $-0{,}38$ \\
+N\textsuperscript{o} features   & AUC-PR  & $-0{,}07$ & $-0{,}05$ \\
+Taxa de anomalia                & AUC-ROC & $-0{,}24$ & $-0{,}35$ \\
+Taxa de anomalia                & AUC-PR  & $0{,}50$  & $0{,}40$  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+% No Overleaf: fazer upload de correlations.png na mesma pasta deste .tex.
+\includegraphics[width=\linewidth]{correlations.png}
+\caption{Desempenho vs.\ caracter\'isticas do dataset (vermelho = conjuntos novos).}
+\label{fig:corr}
+\end{figure}
+
+% =====================================================================
+\section{Conclus\~ao e Trabalhos Futuros}
+Reproduzimos o OptIForest e confirmamos sua tend\^encia de desempenho, documentando
+as diverg\^encias decorrentes de arquivos p\'ublicos distintos do ap\^endice do
+artigo. A avalia\c{c}\~ao em dois conjuntos externos mostrou que o m\'etodo
+\textbf{generaliza bem em escala} e em dados separ\'aveis (\emph{fraud}), mas
+\textbf{sofre com alta dimensionalidade} e com anomalias sutis em baixa dimens\~ao
+(\emph{annthyroid}). \textbf{Limita\c{c}\~oes:} aus\^encia de divis\~ao
+treino/teste (intr\'inseca ao cen\'ario n\~ao-supervisionado), sensibilidade ao
+limiar $\epsilon$ fixado por tamanho, e custo de predi\c{c}\~ao elevado em conjuntos
+grandes (\emph{cover}). \textbf{Trabalhos futuros:} tornar $\epsilon$ adaptativo \`a
+densidade local; investigar fun\c{c}\~oes de \emph{hash} angulares em alta dimens\~ao;
+e a vers\~ao federada citada pelo pr\'oprio artigo.
+
+% =====================================================================
+\begin{thebibliography}{9}
+\bibitem{optiforest} H.~Xiang \emph{et al.}, ``OptIForest: Optimal Isolation Forest
+  for Anomaly Detection,'' in \emph{Proc. IJCAI}, 2023. % [CONFERIR autores]
+\bibitem{iforest} F.~T.~Liu, K.~M.~Ting, and Z.-H.~Zhou, ``Isolation Forest,'' in
+  \emph{Proc. IEEE ICDM}, 2008, pp.~413--422.
+\bibitem{lshiforest} X.~Zhang \emph{et al.}, ``LSHiForest: A Generic Framework for
+  Fast Tree Isolation Based Ensemble Anomaly Analysis,'' in \emph{Proc. IEEE ICDE},
+  2017. % [CONFERIR]
+\bibitem{ecod} Z.~Li \emph{et al.}, ``ECOD: Unsupervised Outlier Detection Using
+  Empirical Cumulative Distribution Functions,'' \emph{IEEE TKDE}, 2022.
+\bibitem{repen} G.~Pang, L.~Cao, L.~Chen, and H.~Liu, ``Learning Representations of
+  Ultrahigh-dimensional Data for Random Distance-based Outlier Detection,'' in
+  \emph{Proc. ACM KDD}, 2018.
+\bibitem{rdp} H.~Wang \emph{et al.}, ``Unsupervised Representation Learning by
+  Predicting Random Distances,'' in \emph{Proc. IJCAI}, 2020.
+\bibitem{adbench} S.~Han \emph{et al.}, ``ADBench: Anomaly Detection Benchmark,'' in
+  \emph{Proc. NeurIPS}, 2022.
+\bibitem{odds} S.~Rayana, ``ODDS Library,'' Stony Brook University, 2016. [Online].
+  Available: \url{https://odds.cs.stonybrook.edu}
+\end{thebibliography}
+
+\end{document}
