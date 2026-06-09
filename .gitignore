@@ -7,3 +7,17 @@ adrepo/
 upstream_optiforest/
 
 data/benchmarks/
+data/
+
+# Archives / extracted result bundles
+*.zip
+results2/__MACOSX/
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.toc
+report/build*.log
+report/*.pdf
+.DS_Store

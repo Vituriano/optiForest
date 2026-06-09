@@ -1,0 +1,2 @@
+version,dataset,run,seed,n_samples,n_features,anomaly_rate_pct,threshold,threshold_mode,threshold_arg,branch,trees,runs,seed_base,auc_roc,auc_pr,fit_seconds,predict_seconds,paper_shape_match,source,note
+v1,kddcup99,11,52,567498,3,0.39,403,paper,,0,100,15,42,0.9930703195824712,0.34273715062679505,113.92007733299397,2325.7377882500004,False,adbench_http_proxy,"The paper cites the full KDDCup99 row, but the released OptIForest code does not include a dedicated KDDCup99 loader. This harness uses the paper's separate HTTP subset dataset instead for runnable reproduction."

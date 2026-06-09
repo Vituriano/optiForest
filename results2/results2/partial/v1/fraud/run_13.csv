@@ -1,0 +1,2 @@
+version,dataset,run,seed,n_samples,n_features,anomaly_rate_pct,threshold,threshold_mode,threshold_arg,branch,trees,runs,seed_base,auc_roc,auc_pr,fit_seconds,predict_seconds,paper_shape_match,source,note
+v1,fraud,13,54,284807,29,0.17,403,paper,,0,100,15,42,0.9414261549189187,0.3402856463264934,143.92816479783505,3632.3365170811303,True,adbench,"New dataset NOT in the OptIForest paper. Credit-card fraud (finance) benchmark from ADBench; ultra-rare anomaly rate (0.17%) extrapolates beyond the paper's range. Stats are ADBench's own, not the paper."
