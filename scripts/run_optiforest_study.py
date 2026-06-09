@@ -361,6 +361,26 @@ def parse_args() -> argparse.Namespace:
         help="Datasets to run in parallel. Defaults to min(6, CPU count, dataset count).",
     )
     parser.add_argument(
+        "--run-workers",
+        type=int,
+        default=1,
+        help=(
+            "Runs to execute in parallel within each dataset (default: 1, sequential). "
+            "Useful for large slow datasets. Cannot be combined with --workers > 1."
+        ),
+    )
+    parser.add_argument(
+        "--flat-workers",
+        type=int,
+        default=0,
+        help=(
+            "If > 0, run a single flat pool over all (dataset, run) combinations with "
+            "this many workers. Maximizes utilization on a large CPU node by keeping "
+            "every worker busy regardless of dataset boundaries. Overrides --workers "
+            "and --run-workers."
+        ),
+    )
+    parser.add_argument(
         "--seed-base",
         type=int,
         default=42,
@@ -380,11 +400,159 @@ def ensure_upstream_repo() -> None:
     subprocess.run(["git", "clone", UPSTREAM_REPO, str(UPSTREAM_DIR)], check=True)
 
 
+_PATCHED_INDEX_MERGED_NODE = False
+
+
+def _patch_optiforest_index_merged_node() -> None:
+    """Vectorize ``HierTree.index_merged_node`` for ``num_of_bin == 2``.
+
+    Upstream OptIForest's ``index_merged_node`` calls ``scipy.spatial.distance.euclidean``
+    inside an O(n^2) Python double loop. For datasets where the threshold is
+    in the hundreds, this makes each tree build take minutes — millions of
+    individual scipy calls dominate the runtime (94% in cProfile).
+
+    For ``num_of_bin == 2`` the upstream weighted-distance formula simplifies
+    algebraically::
+
+        dist_ij = ||C[i] - C[j]|| * 2 * S[i] * S[j] / (S[i] + S[j])
+
+    which equals BOTH branches of the upstream code:
+      * the ``S[i] == S[j]`` shortcut ``||C[i]-C[j]|| * S[i]`` matches because
+        ``2*S*S/(2S) = S``;
+      * the general ``get_weight_distance`` call expands to the same expression.
+
+    The derivation uses
+    ``newcenter = (S_i*C_i + S_j*C_j) / (S_i + S_j)``, giving
+    ``newcenter - C_i = S_j/(S_i+S_j) * (C_j - C_i)`` for any norm, so
+    ``S_i*||nc-C_i|| + S_j*||nc-C_j|| = ||C_i-C_j|| * 2*S_i*S_j/(S_i+S_j)``.
+
+    The vectorized version computes the full weighted-distance matrix with a
+    single ``pdist`` call (C-level scipy) instead of n*(n-1)/2 Python calls,
+    yielding the same argmin pair up to floating-point rounding.
+
+    For ``num_of_bin == 3`` the expansion uses
+    ``<a-c, b-c> = (||a-c||^2 + ||b-c||^2 - ||a-b||^2) / 2`` to write each
+    ``||nc - C_k||^2`` as a linear combination of pairwise squared distances
+    only::
+
+        T = S_i + S_j + S_h
+        ||nc - C_i||^2 = (S_j(S_j+S_h) D[i,j] + S_h(S_j+S_h) D[i,h]
+                          - S_j S_h D[j,h]) / T^2
+
+    Then the loop over ``i`` (n iterations) does vectorized arithmetic over
+    all ``(j, h)`` pairs with ``i < j < h``, replacing the upstream O(n^3)
+    Python triple loop. The only scipy call is the single ``pdist`` for the
+    squared-distance matrix.
+
+    Both vectorizations assume Euclidean distance (the L2OPT variant). For
+    cosine/cityblock the patch falls back to the original implementation.
+    """
+    global _PATCHED_INDEX_MERGED_NODE
+    if _PATCHED_INDEX_MERGED_NODE:
+        return
+    from detectors import opt_tree  # pylint: disable=import-error
+    from scipy.spatial import distance as _scipy_distance
+    from scipy.spatial.distance import pdist, squareform
+
+    original_index_merged_node = opt_tree.HierTree.index_merged_node
+
+    def patched(self, hirenodes, num_of_bin):
+        # Only vectorize when the tree uses Euclidean distance (the L2OPT
+        # variant). Other variants (cosine, cityblock) fall back to the
+        # original Python loop — they would need their own derivations.
+        if getattr(self, "distance", None) is not _scipy_distance.euclidean:
+            return original_index_merged_node(self, hirenodes, num_of_bin)
+
+        n = len(hirenodes)
+        if num_of_bin == 2:
+            if n < 2:
+                return None
+            centers = np.asarray([h.get_center() for h in hirenodes], dtype=float)
+            sizes = np.asarray([h.get_data_size() for h in hirenodes], dtype=float)
+            D = squareform(pdist(centers))
+            S_prod = sizes[:, None] * sizes[None, :]
+            S_sum = sizes[:, None] + sizes[None, :]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                W = D * (2.0 * S_prod / S_sum)
+            W[np.tril_indices(n)] = np.inf
+            i, j = np.unravel_index(int(np.argmin(W)), W.shape)
+            return [int(j), int(i)]
+
+        if num_of_bin == 3:
+            if n < 3:
+                return original_index_merged_node(self, hirenodes, num_of_bin)
+            centers = np.asarray([h.get_center() for h in hirenodes], dtype=float)
+            sizes = np.asarray([h.get_data_size() for h in hirenodes], dtype=float)
+            # Squared pairwise distances: D2[a,b] = ||C_a - C_b||^2
+            D2 = squareform(pdist(centers, "sqeuclidean"))
+
+            # For triplet (i, j, h) with i < j < h, the upstream formula is
+            #   nc = (S_i C_i + S_j C_j + S_h C_h) / T,  T = S_i + S_j + S_h
+            #   dist = ||nc - C_i|| S_i + ||nc - C_j|| S_j + ||nc - C_h|| S_h
+            # Expanding ||nc - C_k||^2 in terms of pairwise squared distances
+            # (using <a-c, b-c> = (||a-c||^2 + ||b-c||^2 - ||a-b||^2) / 2):
+            #   ||nc - C_i||^2 = (S_j (S_j+S_h) D[i,j] + S_h (S_j+S_h) D[i,h]
+            #                    - S_j S_h D[j,h]) / T^2
+            #   ||nc - C_j||^2 = (S_i (S_i+S_h) D[i,j] + S_h (S_i+S_h) D[j,h]
+            #                    - S_i S_h D[i,h]) / T^2
+            #   ||nc - C_h||^2 = (S_i (S_i+S_j) D[i,h] + S_j (S_i+S_j) D[j,h]
+            #                    - S_i S_j D[i,j]) / T^2
+            best_dist = np.inf
+            best_triplet = None
+            # Loop over the smallest index i, vectorize over (j, h) with i<j<h.
+            for i in range(n - 2):
+                # Build (j, h) pairs with i < j < h
+                jh = np.triu_indices(n - i - 1, k=1)
+                jj = jh[0] + i + 1
+                hh = jh[1] + i + 1
+                S_i = sizes[i]
+                S_j = sizes[jj]
+                S_h = sizes[hh]
+                T = S_i + S_j + S_h
+                D_ij = D2[i, jj]
+                D_ih = D2[i, hh]
+                D_jh = D2[jj, hh]
+
+                SP_jh = S_j + S_h
+                SP_ih = S_i + S_h
+                SP_ij = S_i + S_j
+
+                inv_T2 = 1.0 / (T * T)
+                n_i_sq = (S_j * SP_jh * D_ij + S_h * SP_jh * D_ih - S_j * S_h * D_jh) * inv_T2
+                n_j_sq = (S_i * SP_ih * D_ij + S_h * SP_ih * D_jh - S_i * S_h * D_ih) * inv_T2
+                n_h_sq = (S_i * SP_ij * D_ih + S_j * SP_ij * D_jh - S_i * S_j * D_ij) * inv_T2
+
+                # Clamp tiny negatives from floating-point noise
+                np.maximum(n_i_sq, 0.0, out=n_i_sq)
+                np.maximum(n_j_sq, 0.0, out=n_j_sq)
+                np.maximum(n_h_sq, 0.0, out=n_h_sq)
+
+                dist = (
+                    np.sqrt(n_i_sq) * S_i
+                    + np.sqrt(n_j_sq) * S_j
+                    + np.sqrt(n_h_sq) * S_h
+                )
+                if dist.size == 0:
+                    continue
+                local_idx = int(np.argmin(dist))
+                if dist[local_idx] < best_dist:
+                    best_dist = float(dist[local_idx])
+                    best_triplet = [int(hh[local_idx]), int(jj[local_idx]), int(i)]
+
+            return best_triplet
+
+        return original_index_merged_node(self, hirenodes, num_of_bin)
+
+    opt_tree.HierTree.index_merged_node = patched
+    _PATCHED_INDEX_MERGED_NODE = True
+
+
 def import_optiforest():
     ensure_upstream_repo()
     sys.path.insert(0, str(UPSTREAM_DIR))
     from detectors import OptIForest  # pylint: disable=import-error
 
+    _patch_optiforest_index_merged_node()
     return OptIForest
 
 
@@ -706,6 +874,34 @@ def summarize_run_rows(
     }
 
 
+def _run_single_worker(
+    dataset: str,
+    run_number: int,
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    """Top-level worker for intra-dataset run parallelism.
+
+    Loads data independently inside the worker process to avoid pickling large
+    numpy arrays across process boundaries.
+    """
+    ensure_upstream_repo()
+    sys.path.insert(0, str(UPSTREAM_DIR))
+    from detectors import OptIForest as _OptIForest  # pylint: disable=import-error
+
+    _patch_optiforest_index_merged_node()
+
+    spec = PAPER_DATASETS[dataset]
+    X, y = load_dataset(dataset, spec, force=False)
+    threshold = select_threshold(dataset, X, args)
+    matches = shape_matches_paper(X, y, spec)
+    observed_rate = round(100.0 * float(y.mean()), 2)
+    row = run_dataset_run(
+        dataset, run_number, args, _OptIForest, X, y, spec, threshold, matches, observed_rate
+    )
+    write_csv_atomic(partial_run_path(args, dataset, run_number), [row])
+    return row
+
+
 def run_dataset(dataset: str, args: argparse.Namespace) -> dict[str, object]:
     migrate_legacy_partials(args, dataset)
 
@@ -728,27 +924,53 @@ def run_dataset(dataset: str, args: argparse.Namespace) -> dict[str, object]:
     if completed_count:
         print(f"[{dataset}] found {completed_count}/{args.runs} completed run(s)", flush=True)
 
-    for run_number in pending_runs:
-        print(f"[{dataset}] run {run_number}/{args.runs} starting", flush=True)
-        row = run_dataset_run(
-            dataset,
-            run_number,
-            args,
-            OptIForest,
-            X,
-            y,
-            spec,
-            threshold,
-            matches,
-            observed_rate,
-        )
-        write_csv_atomic(partial_run_path(args, dataset, run_number), [row])
+    run_workers = getattr(args, "run_workers", 1) or 1
+
+    if run_workers > 1 and len(pending_runs) > 1:
         print(
-            f"[{dataset}] run {run_number}/{args.runs} "
-            f"auc={row['auc_roc']:.4f} pr={row['auc_pr']:.4f} "
-            f"fit={row['fit_seconds']:.2f}s pred={row['predict_seconds']:.2f}s",
+            f"[{dataset}] running {len(pending_runs)} pending run(s) "
+            f"with {run_workers} worker(s) in parallel",
             flush=True,
         )
+        with concurrent.futures.ProcessPoolExecutor(max_workers=run_workers) as executor:
+            future_to_run = {
+                executor.submit(_run_single_worker, dataset, run_number, args): run_number
+                for run_number in pending_runs
+            }
+            for future in concurrent.futures.as_completed(future_to_run):
+                run_number = future_to_run[future]
+                try:
+                    row = future.result()
+                except Exception as exc:
+                    raise RuntimeError(f"[{dataset}] run {run_number} failed") from exc
+                print(
+                    f"[{dataset}] run {run_number}/{args.runs} done "
+                    f"auc={row['auc_roc']:.4f} pr={row['auc_pr']:.4f} "
+                    f"fit={row['fit_seconds']:.2f}s pred={row['predict_seconds']:.2f}s",
+                    flush=True,
+                )
+    else:
+        for run_number in pending_runs:
+            print(f"[{dataset}] run {run_number}/{args.runs} starting", flush=True)
+            row = run_dataset_run(
+                dataset,
+                run_number,
+                args,
+                OptIForest,
+                X,
+                y,
+                spec,
+                threshold,
+                matches,
+                observed_rate,
+            )
+            write_csv_atomic(partial_run_path(args, dataset, run_number), [row])
+            print(
+                f"[{dataset}] run {run_number}/{args.runs} "
+                f"auc={row['auc_roc']:.4f} pr={row['auc_pr']:.4f} "
+                f"fit={row['fit_seconds']:.2f}s pred={row['predict_seconds']:.2f}s",
+                flush=True,
+            )
 
     run_rows = completed_run_rows(args, dataset)
     summary = summarize_run_rows(args, dataset, spec, run_rows)
@@ -761,6 +983,58 @@ def run_dataset(dataset: str, args: argparse.Namespace) -> dict[str, object]:
         flush=True,
     )
     return summary
+
+
+def run_flat_pool(args: argparse.Namespace, pending: list[str], flat_workers: int) -> None:
+    """Run all pending (dataset, run) combinations in a single flat process pool.
+
+    Unlike the per-dataset pool, this keeps every worker busy across dataset
+    boundaries: a fast dataset finishing early frees its slot for a remaining
+    run of a slow dataset, instead of leaving the slot idle.
+    """
+    # Order datasets by paper sample count ascending so smaller datasets
+    # finish quickly and free workers for the heavy ones, instead of the
+    # heavy ones (e.g. cover) hogging every slot from the start.
+    ordered_pending = sorted(pending, key=lambda d: PAPER_DATASETS[d].paper.n_samples)
+    work: list[tuple[str, int]] = []
+    for dataset in ordered_pending:
+        migrate_legacy_partials(args, dataset)
+        for run_number in missing_runs(args, dataset):
+            work.append((dataset, run_number))
+
+    total = len(work)
+    print(
+        f"Flat pool: {total} pending (dataset, run) job(s) across {flat_workers} worker(s)",
+        flush=True,
+    )
+    if not work:
+        return
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=flat_workers) as executor:
+        future_to_item = {
+            executor.submit(_run_single_worker, dataset, run_number, args): (dataset, run_number)
+            for dataset, run_number in work
+        }
+        done = 0
+        for future in concurrent.futures.as_completed(future_to_item):
+            dataset, run_number = future_to_item[future]
+            try:
+                row = future.result()
+            except Exception as exc:
+                raise RuntimeError(f"[{dataset}] run {run_number} failed") from exc
+            done += 1
+            print(
+                f"[{dataset}] run {run_number}/{args.runs} done ({done}/{total}) "
+                f"auc={row['auc_roc']:.4f} pr={row['auc_pr']:.4f} "
+                f"fit={row['fit_seconds']:.2f}s pred={row['predict_seconds']:.2f}s",
+                flush=True,
+            )
+
+    for dataset in pending:
+        run_rows = completed_run_rows(args, dataset)
+        if run_rows:
+            summary = summarize_run_rows(args, dataset, PAPER_DATASETS[dataset], run_rows)
+            write_csv_atomic(partial_summary_path(args, dataset), [summary])
 
 
 def collect_partials(
@@ -794,12 +1068,27 @@ def main() -> int:
         raise ValueError("--trees must be at least 1")
     if workers < 1:
         raise ValueError("--workers must be at least 1")
+    if args.flat_workers < 0:
+        raise ValueError("--flat-workers must be >= 0")
+    if args.flat_workers > 0:
+        if args.workers is not None and args.workers > 1:
+            print("Note: --flat-workers overrides --workers.")
+        if args.run_workers > 1:
+            print("Note: --flat-workers overrides --run-workers.")
+    elif workers > 1 and args.run_workers > 1:
+        print(
+            "Warning: --workers > 1 and --run-workers > 1 would create nested process pools. "
+            "Resetting --run-workers to 1."
+        )
+        args.run_workers = 1
 
     print(
         f"Running OptIForest {args.version} on {len(selected)} dataset(s): "
         f"{', '.join(selected)}"
     )
     print(f"Using {workers} dataset worker(s); partials: {Path(args.partials_dir) / safe_version(args.version)}")
+
+    ensure_upstream_repo()
 
     for dataset in selected:
         ensure_dataset_file(dataset, PAPER_DATASETS[dataset], force=args.force_refresh_data)
@@ -810,7 +1099,9 @@ def main() -> int:
     for dataset in completed:
         print(f"[{dataset}] skipping existing partial result", flush=True)
 
-    if pending and workers == 1:
+    if pending and args.flat_workers > 0:
+        run_flat_pool(args, pending, args.flat_workers)
+    elif pending and workers == 1:
         for dataset in pending:
             run_dataset(dataset, args)
     elif pending:
