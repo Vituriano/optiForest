@@ -21,3 +21,6 @@ results2/__MACOSX/
 report/build*.log
 report/*.pdf
 .DS_Store
+
+# Report image copies (canonical em results2/analysis/plots)
+report/*.png

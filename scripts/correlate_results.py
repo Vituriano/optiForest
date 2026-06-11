@@ -87,8 +87,39 @@ def main() -> int:
     fig.savefig(plots_dir / "correlations.png", dpi=150)
     plt.close(fig)
 
+    # Subplots individuais (um arquivo por "quadradinho"), para empilhar
+    # verticalmente em coluna unica no relatorio.
+    short = {"n_samples": "samples", "n_features": "features",
+             "anomaly_rate_pct": "anomaly"}
+    for metric, mlabel in METRICS.items():
+        mtag = "roc" if metric == "mean_auc_roc" else "pr"
+        for feat, flabel in FEATURES.items():
+            col = feat_cols[feat]
+            fig, ax = plt.subplots(figsize=(5.6, 3.7))
+            sub = df.dropna(subset=[col, metric])
+            colors = ["#d1495b" if n in NEW_DATASETS else "#30638e"
+                      for n in sub["dataset"]]
+            ax.scatter(sub[col], 100 * sub[metric], c=colors, s=42)
+            for _, row in sub.iterrows():
+                ax.annotate(row["dataset"], (row[col], 100 * row[metric]),
+                            fontsize=8, alpha=0.75)
+            if len(sub) > 1:
+                z = np.polyfit(sub[col], 100 * sub[metric], 1)
+                xs = np.linspace(sub[col].min(), sub[col].max(), 50)
+                ax.plot(xs, np.polyval(z, xs), "--", color="gray", lw=1.2)
+            r = sub[col].corr(100 * sub[metric], method="pearson")
+            ax.set_xlabel(flabel, fontsize=11)
+            ax.set_ylabel(mlabel + " (%)", fontsize=11)
+            ax.set_title(f"{mlabel} vs {flabel}  (r={r:.2f})", fontsize=12)
+            ax.tick_params(labelsize=9)
+            fig.tight_layout()
+            fig.savefig(plots_dir / f"corr_{mtag}_{short[feat]}.png",
+                        dpi=150, bbox_inches="tight")
+            plt.close(fig)
+
     print(f"\n  -> {out_dir / 'correlations.csv'}")
     print(f"  -> {plots_dir / 'correlations.png'}")
+    print(f"  -> {plots_dir / 'corr_{{roc,pr}}_{{samples,features,anomaly}}.png'}")
     return 0
 
 
