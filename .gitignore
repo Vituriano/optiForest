@@ -24,3 +24,6 @@ report/*.pdf
 
 # Report image copies (canonical em results2/analysis/plots)
 report/*.png
+
+# Classe IEEEtran baixada apenas para validar localmente (Overleaf ja a possui)
+report/IEEEtran.cls
