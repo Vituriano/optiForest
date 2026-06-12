@@ -86,26 +86,26 @@ limites em anomalias sutis de baixa dimens\~ao (\emph{annthyroid}, AUC-ROC $0{,}
 
 \section{Introdu\c{c}\~ao}
 
-\textbf{Problema.} Detec\c{c}\~ao de anomalias consiste em identificar inst\^ancias
+Detec\c{c}\~ao de anomalias consiste em identificar inst\^ancias
 raras que se desviam do padr\~ao dos dados, tipicamente sem r\'otulos
 (n\~ao-supervisionada). \'E interessante por aparecer em dom\'inios cr\'iticos --
 fraude financeira, intrus\~ao em redes, diagn\'ostico m\'edico -- nos quais
 anomalias s\~ao escassas e caras de rotular.
 
-\textbf{Por que o artigo foi necess\'ario.} A \emph{Isolation Forest} (iForest)
+A \emph{Isolation Forest} (iForest)
 isola anomalias por parti\c{c}\~oes aleat\'orias e \'e eficiente, mas usa \'arvores
 bin\'arias por conven\c{c}\~ao. Trabalhos como a LSHiForest mostraram empiricamente
 que estruturas multi-ramo podem detectar melhor, por\'em \emph{sem} teoria que
 determinasse o fator de ramifica\c{c}\~ao \'otimo. Faltava resposta te\'orica e
 pr\'atica para a estrutura ideal de uma floresta de isolamento.
 
-\textbf{Solu\c{c}\~oes existentes e desvantagens.} M\'etodos de isolamento
+Quanto \`as solu\c{c}\~oes existentes, os m\'etodos de isolamento
 (iForest, LSHiForest) n\~ao aprendem com os dados; m\'etodos de aprendizado
 profundo (REPEN, RDP) aprendem, mas t\^em alto custo computacional; m\'etodos
 estat\'isticos (ECOD) s\~ao r\'apidos, por\'em fr\'ageis quando a distribui\c{c}\~ao
 foge de suas premissas.
 
-\textbf{Proposta do artigo.} O OptIForest formaliza a \emph{efici\^encia de
+O OptIForest, por sua vez, formaliza a \emph{efici\^encia de
 isolamento}, prova que o fator de ramifica\c{c}\~ao \'otimo \'e $e \approx 2{,}718$ e
 constr\'oi uma floresta que aproxima esse \'otimo combinando \emph{learning-to-hash}
 por \emph{clustering}, equilibrando custo e desempenho.
@@ -162,7 +162,7 @@ rede do KDDCup'99), \emph{smtp} (tr\'afego de \emph{e-mail}) e \emph{fraud} (tra
 de cart\~ao). Nesses casos, a \textbf{anomalia} a ser ranqueada \'e justamente a
 tentativa de intrus\~ao ou fraude.
 
-\textbf{Ataques considerados.} Intrus\~oes de rede (varreduras, \emph{DoS}, acessos
+Os ataques considerados s\~ao intrus\~oes de rede (varreduras, \emph{DoS}, acessos
 n\~ao-autorizados) e fraude financeira, tratados como inst\^ancias raras cujo vetor de
 \emph{features} se desvia estatisticamente do tr\'afego/transa\c{c}\~oes leg\'itimas.
 \textbf{Premissas} para o detector funcionar: (i)~ataques s\~ao \emph{raros} frente ao
@@ -177,15 +177,15 @@ detector. Esse limite \'e retomado em Trabalhos Futuros.
 
 \section{Sistema Proposto pelo Artigo de Refer\^encia}
 
-\textbf{Vis\~ao geral.} O OptIForest \'e um \emph{ensemble} de \'arvores de
-isolamento \'otimas. \textbf{Entrada:} um conjunto de dados $D$ sem r\'otulos.
-\textbf{Sa\'ida:} um \emph{score} de anomalia por inst\^ancia (quanto menor o
+O OptIForest \'e um \emph{ensemble} de \'arvores de
+isolamento \'otimas. Sua \textbf{entrada} \'e um conjunto de dados $D$ sem r\'otulos
+e sua \textbf{sa\'ida} \'e um \emph{score} de anomalia por inst\^ancia (quanto menor o
 caminho de isolamento, mais an\^omala). Cada \'arvore tem duas partes: camadas
 inferiores produzidas por uma floresta LSH (\emph{LSHiForest}) e camadas superiores
 refinadas por \emph{clustering} hier\'arquico aglomerativo -- a parte que ``aprende''
 com os dados.
 
-\textbf{Componentes (entrada $\rightarrow$ fun\c{c}\~ao $\rightarrow$ sa\'ida).}
+Seus componentes, na forma entrada $\rightarrow$ fun\c{c}\~ao $\rightarrow$ sa\'ida, s\~ao:
 (1)~\emph{Amostragem}: de $D$ extrai sub-amostras independentes (uma por \'arvore),
 gerando diversidade no \emph{ensemble}. (2)~\emph{LSHTree}: sobre cada sub-amostra,
 particiona recursivamente os dados com fun\c{c}\~oes de \emph{hash} sens\'iveis \`a
@@ -203,12 +203,12 @@ superiores da \'arvore (Alg.~\ref{alg:opt}). (4)~\emph{Floresta}: agrega as
 \'arvores \'otimas. (5)~\emph{Score}: dada uma inst\^ancia, devolve seu grau de
 anomalia (Eq.~\ref{eq:score}).
 
-\textbf{Efici\^encia de isolamento e fator $e$.} O artigo define a efici\^encia de
+O artigo define a efici\^encia de
 isolamento e formula um problema de otimiza\c{c}\~ao cuja solu\c{c}\~ao indica fator de
 ramifica\c{c}\~ao \'otimo $v \approx e$. Na pr\'atica, usam-se ramos bin\'arios e
 tern\'arios com distribui\c{c}\~ao exponencial para aproximar $e$.
 
-\textbf{Aprendizado por clustering.} A \'arvore LSH \'e cortada por um limiar
+No aprendizado por \emph{clustering}, a \'arvore LSH \'e cortada por um limiar
 $\epsilon$ (\emph{cut threshold}): n\'os com tamanho $\le \epsilon$ tornam-se
 \emph{clusters} iniciais, que s\~ao fundidos minimizando a \emph{distor\c{c}\~ao}
 \begin{equation}
@@ -234,7 +234,7 @@ aprende mais (mais \emph{clusters}); $\epsilon$ grande degenera na LSHiForest.
 \end{algorithmic}
 \end{algorithm}
 
-\textbf{Score de anomalia.} Como na iForest, o \emph{score} decai com a profundidade
+Por fim, o \emph{score de anomalia}, como na iForest, decai com a profundidade
 m\'edia de isolamento $h(x)$ na floresta, normalizada pelo comprimento esperado de
 caminho $c(n)$ de uma \'arvore com $n$ amostras:
 \begin{equation}
@@ -246,7 +246,7 @@ pr\'oximo de $1$ e s\~ao ranqueadas como mais an\^omalas.
 
 \section{Metodologia}
 
-\textbf{Protocolo.} O OptIForest \'e \textbf{n\~ao-supervisionado}: n\~ao h\'a divis\~ao
+O OptIForest \'e \textbf{n\~ao-supervisionado}: n\~ao h\'a divis\~ao
 treino/valida\c{c}\~ao/teste. O modelo \'e ajustado e avaliado sobre \emph{todo} o
 conjunto, e as anomalias servem apenas como gabarito para o c\'alculo das m\'etricas.
 Por isso reporta-se a contagem por classe (normal vs.\ anomalia) do conjunto completo,
@@ -377,7 +377,7 @@ incompat\'ivel com a mesma rotina de \emph{clustering} hier\'arquico e sugere qu
 artefato p\'ublico de \texttt{xiagll/optiforest} n\~ao corresponde \`a vers\~ao
 experimental que gerou a Tabela~1 -- e n\~ao um erro de reprodu\c{c}\~ao desta equipe.
 
-\textbf{Compara\c{c}\~ao com outros m\'etodos.} No artigo, o OptIForest lidera o
+Na compara\c{c}\~ao com outros m\'etodos, no artigo o OptIForest lidera o
 AUC-ROC m\'edio ($83{,}9\%$), \`a frente da LSHiForest ($81{,}9\%$), da ECOD
 ($78{,}8\%$) e da iForest cl\'assica ($74{,}3\%$)~\cite{optiforest}. A reprodu\c{c}\~ao
 deste trabalho recupera a mesma ordena\c{c}\~ao qualitativa entre datasets, confirmando
